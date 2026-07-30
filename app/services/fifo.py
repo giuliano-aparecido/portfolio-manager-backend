@@ -1,0 +1,172 @@
+"""FIFO cost-basis engine — ported verbatim from the original TypeScript
+lib/portfolio/fifo.ts. Distinct fields per transaction type (rather than
+one generic "shares" field) is the whole point: it's what prevents dividend
+cash from being mistaken for a share quantity.
+"""
+
+from dataclasses import dataclass, field
+from datetime import datetime
+
+TOLERANCE = 1e-9
+
+
+@dataclass
+class Lot:
+    qty: float
+    cost_per_share: float  # native currency
+    date: datetime
+    fx_rate_to_chf: float  # captured at purchase time, immutable
+    is_from_drip: bool = False
+
+
+@dataclass
+class ProcessedTransaction:
+    ticker: str
+    date: datetime
+    type: str  # "BUY" | "SELL" | "DIVIDEND" | "DRIP"
+    native_currency: str
+    fx_rate_to_chf: float
+    quantity: float | None = None  # BUY, SELL, DRIP
+    price_per_share: float | None = None  # BUY, SELL, DRIP — native currency
+    cash_amount: float | None = None  # DIVIDEND — native currency
+    notes: str | None = None
+
+
+@dataclass
+class ConsumedLot:
+    qty: float
+    cost_per_share: float
+    date: datetime
+    fx_rate_to_chf: float
+
+
+@dataclass
+class RealizedGain:
+    date: datetime
+    qty_sold: float
+    proceeds_native: float
+    cost_basis_native: float
+    gain_native: float
+    proceeds_chf: float
+    cost_basis_chf: float
+    gain_chf: float
+    lots_consumed: list[ConsumedLot] = field(default_factory=list)
+
+
+@dataclass
+class FIFOResult:
+    remaining_lots: list[Lot]
+    current_shares: float
+    current_cost_basis_native: float
+    current_cost_basis_chf: float
+    realized_gains: list[RealizedGain]
+    total_realized_gain_native: float
+    total_realized_gain_chf: float
+
+
+def process_ticker(transactions: list[ProcessedTransaction]) -> FIFOResult:
+    """Input transactions must already be sorted ascending by date (caller
+    responsibility).
+    """
+    lots: list[Lot] = []
+    realized: list[RealizedGain] = []
+
+    for txn in transactions:
+        if txn.type in ("BUY", "DRIP"):
+            lots.append(
+                Lot(
+                    qty=txn.quantity,
+                    cost_per_share=txn.price_per_share,
+                    date=txn.date,
+                    fx_rate_to_chf=txn.fx_rate_to_chf,
+                    is_from_drip=(txn.type == "DRIP"),
+                )
+            )
+        elif txn.type == "SELL":
+            remaining = txn.quantity
+            cost_basis_native = 0.0
+            cost_basis_chf = 0.0
+            lots_consumed: list[ConsumedLot] = []
+            while remaining > TOLERANCE:
+                if not lots:
+                    raise ValueError(
+                        f"Selling more shares than held for {txn.ticker} on "
+                        f"{txn.date.date().isoformat()}: {remaining} shares short"
+                    )
+                lot = lots[0]
+                take = min(lot.qty, remaining)
+                cost_basis_native += take * lot.cost_per_share
+                # Uses the consumed lot's own historical FX rate — never
+                # today's rate nor the sell transaction's rate.
+                cost_basis_chf += take * lot.cost_per_share * lot.fx_rate_to_chf
+                lots_consumed.append(
+                    ConsumedLot(
+                        qty=take, cost_per_share=lot.cost_per_share, date=lot.date, fx_rate_to_chf=lot.fx_rate_to_chf
+                    )
+                )
+                lot.qty -= take
+                remaining -= take
+                if lot.qty <= TOLERANCE:
+                    lots.pop(0)
+            proceeds_native = txn.quantity * txn.price_per_share
+            proceeds_chf = proceeds_native * txn.fx_rate_to_chf  # sell's own FX rate — proceeds are realized "now"
+            realized.append(
+                RealizedGain(
+                    date=txn.date,
+                    qty_sold=txn.quantity,
+                    proceeds_native=proceeds_native,
+                    cost_basis_native=cost_basis_native,
+                    gain_native=proceeds_native - cost_basis_native,
+                    proceeds_chf=proceeds_chf,
+                    cost_basis_chf=cost_basis_chf,
+                    gain_chf=proceeds_chf - cost_basis_chf,
+                    lots_consumed=lots_consumed,
+                )
+            )
+        elif txn.type == "DIVIDEND":
+            continue  # no-op — never touches lots or share count
+        else:
+            raise ValueError(f"Unknown transaction type: {txn.type}")
+
+    current_shares = sum(lot.qty for lot in lots)
+    # DRIP-originated lots are excluded from cost basis — only original BUY
+    # shares count.
+    current_cost_basis_native = sum(lot.qty * lot.cost_per_share for lot in lots if not lot.is_from_drip)
+    current_cost_basis_chf = sum(
+        lot.qty * lot.cost_per_share * lot.fx_rate_to_chf for lot in lots if not lot.is_from_drip
+    )
+    total_realized_gain_native = sum(r.gain_native for r in realized)
+    total_realized_gain_chf = sum(r.gain_chf for r in realized)
+
+    return FIFOResult(
+        remaining_lots=lots,
+        current_shares=current_shares,
+        current_cost_basis_native=current_cost_basis_native,
+        current_cost_basis_chf=current_cost_basis_chf,
+        realized_gains=realized,
+        total_realized_gain_native=total_realized_gain_native,
+        total_realized_gain_chf=total_realized_gain_chf,
+    )
+
+
+def validate_ticker(ticker: str, transactions: list[ProcessedTransaction], result: FIFOResult) -> dict:
+    total_buys = sum(t.quantity for t in transactions if t.type in ("BUY", "DRIP"))
+    total_sells = sum(t.quantity for t in transactions if t.type == "SELL")
+    expected_shares = total_buys - total_sells
+
+    errors: list[str] = []
+    if abs(result.current_shares - expected_shares) > 1e-6:
+        errors.append(
+            f"current_shares mismatch: got {result.current_shares:.4f}, expected {expected_shares:.4f} "
+            f"(buys+drip: {total_buys}, sells: {total_sells})"
+        )
+    if result.current_shares < -1e-6:
+        errors.append(f"current_shares is negative: {result.current_shares}")
+
+    expected_cost_basis = sum(lot.qty * lot.cost_per_share for lot in result.remaining_lots if not lot.is_from_drip)
+    if abs(result.current_cost_basis_native - expected_cost_basis) > 1e-6:
+        errors.append(
+            f"current_cost_basis mismatch: got {result.current_cost_basis_native}, expected {expected_cost_basis}"
+        )
+
+    return {"valid": len(errors) == 0, "errors": errors}
