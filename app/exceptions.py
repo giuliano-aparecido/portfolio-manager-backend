@@ -1,24 +1,42 @@
 from fastapi import Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
-class UnauthorizedError(Exception):
-    """Raised by the auth dependency when there's no valid session/token.
-
-    Mapped to 401 {"error": "Unauthorized"} — matching the original Next.js
-    app's exact response shape, not FastAPI's default {"detail": ...}.
+class AppError(Exception):
+    """Generic {"error": "..."} + status code — every route in the original
+    Next.js app returns this exact JSON shape on failure, not FastAPI's
+    default {"detail": ...}.
     """
 
-
-class NotFoundError(Exception):
-    def __init__(self, message: str = "Not found") -> None:
+    def __init__(self, status_code: int, message: str) -> None:
+        self.status_code = status_code
         self.message = message
         super().__init__(message)
 
 
-async def unauthorized_handler(_request: Request, _exc: UnauthorizedError) -> JSONResponse:
-    return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+class UnauthorizedError(AppError):
+    def __init__(self) -> None:
+        super().__init__(401, "Unauthorized")
 
 
-async def not_found_handler(_request: Request, exc: NotFoundError) -> JSONResponse:
-    return JSONResponse(status_code=404, content={"error": exc.message})
+class NotFoundError(AppError):
+    def __init__(self, message: str = "Not found") -> None:
+        super().__init__(404, message)
+
+
+async def app_error_handler(_request: Request, exc: AppError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"error": exc.message})
+
+
+async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Safety net for malformed request bodies that fall outside the
+    documented, hand-validated error cases (e.g. a field that's a JSON
+    object where a number was expected) — keeps the {"error": ...} envelope
+    consistent instead of leaking FastAPI's default {"detail": [...]}
+    shape, even though the message text won't match a specific original
+    error string in these edge cases.
+    """
+    first = exc.errors()[0]
+    field = ".".join(str(p) for p in first["loc"] if p != "body")
+    return JSONResponse(status_code=400, content={"error": f"Invalid value for {field or 'request body'}"})

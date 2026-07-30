@@ -1,9 +1,13 @@
 from collections.abc import Generator
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.db.session import engine
+from app.db.session import engine, get_db
+from app.dependencies.auth import get_authenticated_user_id
+from app.main import app
+from app.models import User
 
 
 @pytest.fixture
@@ -26,3 +30,41 @@ def db_session() -> Generator[Session, None, None]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+@pytest.fixture
+def client(db_session: Session) -> Generator[TestClient, None, None]:
+    """A TestClient whose get_db dependency is overridden to use the same
+    transaction-rollback-isolated session as db_session, so route tests can
+    both call the API and inspect the DB directly in the same test.
+    """
+
+    def override_get_db() -> Generator[Session, None, None]:
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture
+def test_user(db_session: Session) -> User:
+    user = User(email="route-test@example.com", name="Route Test")
+    db_session.add(user)
+    db_session.flush()
+    return user
+
+
+@pytest.fixture
+def authed_client(client: TestClient, test_user: User) -> Generator[TestClient, None, None]:
+    """A client fixture with auth pre-overridden to a fixed test user —
+    for route tests that aren't specifically exercising the auth
+    dependency itself (that's covered directly in test_auth_dependency.py).
+    """
+    app.dependency_overrides[get_authenticated_user_id] = lambda: test_user.id
+    try:
+        yield client
+    finally:
+        app.dependency_overrides.pop(get_authenticated_user_id, None)
