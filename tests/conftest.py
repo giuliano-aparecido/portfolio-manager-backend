@@ -14,7 +14,12 @@ def db_session() -> Generator[Session, None, None]:
     """
     connection = engine.connect()
     transaction = connection.begin()
-    session = Session(bind=connection)
+    # join_transaction_mode="create_savepoint": code under test may call
+    # session.commit() itself (e.g. the auth dependency's dev-mode
+    # auto-provision) — this makes commit() only release a SAVEPOINT
+    # instead of ending our outer transaction, so the rollback below still
+    # discards everything.
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
     try:
         yield session
     finally:
