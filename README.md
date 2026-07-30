@@ -36,6 +36,17 @@ Health check: `GET http://localhost:8000/health`
 pytest
 ```
 
+## Deployment
+
+Render (backend, prod only) + Vercel (frontend, prod only) + the **same
+Neon project the original Node app already uses** — no separate project was
+provisioned for this rewrite. `alembic upgrade head` creates this app's
+snake_case tables (`users`, `portfolio_transactions`, ...) fresh in each
+branch; they coexist safely alongside the old app's PascalCase-quoted
+Prisma tables (`"User"`, `"PortfolioTransaction"`, ...) in the same
+database, since the table names never collide. No data migration step —
+the new backend simply starts with empty tables.
+
 ## Deviations from the original Next.js app
 
 Found during the port and fixed rather than carried over:
