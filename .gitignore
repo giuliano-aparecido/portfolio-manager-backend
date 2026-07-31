@@ -8,3 +8,5 @@ venv/
 *.egg-info/
 .coverage
 htmlcov/
+.dev-server.log
+.dev-server.log.err
