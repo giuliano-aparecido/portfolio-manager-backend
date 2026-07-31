@@ -7,6 +7,7 @@ from app.exceptions import AppError, NotFoundError
 from app.models import PassiveInvestment, PassiveTransaction
 from app.schemas.passive import PassiveTransactionCreateRequest, PassiveTransactionOut, PassiveTransactionUpdateRequest
 from app.services.ledger import PassiveLedgerTxn, validate_cash_ledger_integrity
+from app.services.locking import lock_passive_investment
 from app.services.validation import PASSIVE_TXN_TYPES, is_valid_passive_txn_type
 from app.utils import parse_date, to_number
 
@@ -46,6 +47,11 @@ def create_passive_transaction(
     if amount_native is None or amount_native <= 0:
         raise AppError(400, "amountNative must be a positive number")
     notes = (body.notes or "").strip() or None
+
+    # See app/services/locking.py — acquired before the "existing rows"
+    # read so a second concurrent request blocks until this one commits,
+    # then validates against its committed write instead of a stale snapshot.
+    lock_passive_investment(db, inv_id)
 
     existing_txns = db.query(PassiveTransaction).filter(PassiveTransaction.passive_investment_id == inv_id).all()
     candidate = PassiveLedgerTxn(date=date, type=txn_type, amount_native=amount_native)
@@ -98,6 +104,8 @@ def update_passive_transaction(
         raise AppError(400, "amountNative must be a positive number")
     notes = (body.notes or "").strip() or None
 
+    lock_passive_investment(db, inv_id)
+
     others = (
         db.query(PassiveTransaction)
         .filter(PassiveTransaction.passive_investment_id == inv_id, PassiveTransaction.id != existing_txn.id)
@@ -126,6 +134,8 @@ def delete_passive_transaction(
 ) -> dict:
     inv_id = _parse_investment_id(investment_id)
     existing_txn = _get_owned_transaction(db, inv_id, txn_id, user_id)
+
+    lock_passive_investment(db, inv_id)
 
     remaining = (
         db.query(PassiveTransaction)

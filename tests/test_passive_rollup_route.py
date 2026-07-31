@@ -23,6 +23,36 @@ class TestPassiveRollupRoute:
         assert body["rows"][0]["costBasisCHF"] == 900
         assert body["totalMarketValueCHF"] == 900
 
+    def test_fx_error_names_the_affected_investments(
+        self, authed_client: TestClient, db_session: Session, test_user: User, monkeypatch
+    ) -> None:
+        # Two USD investments and one CHF investment. USD's FX fetch fails;
+        # CHF's succeeds. Both USD investments should be named in the
+        # error — not just "USD failed", which gives no way to tell which
+        # rows are missing from the totals below.
+        usd_a = PassiveInvestment(user_id=test_user.id, name="USD Fund A", type="CASH", currency="USD")
+        usd_b = PassiveInvestment(user_id=test_user.id, name="USD Fund B", type="CASH", currency="USD")
+        chf_fund = PassiveInvestment(user_id=test_user.id, name="CHF Fund", type="CASH", currency="CHF")
+        db_session.add_all([usd_a, usd_b, chf_fund])
+        db_session.flush()
+        db_session.add(PassiveTransaction(passive_investment_id=chf_fund.id, type="DEPOSIT", date=datetime(2024, 1, 1, tzinfo=timezone.utc), amount_native=500))
+        db_session.flush()
+
+        def fake_fx(ccy: str, force_refresh: bool = False) -> float:
+            if ccy == "USD":
+                raise RuntimeError("No FX rate available for USD")
+            return 1.0
+
+        monkeypatch.setattr("app.services.passive_rollup_service.fetch_fx_rate_to_chf", fake_fx)
+
+        response = authed_client.get("/passive-rollup")
+        assert response.status_code == 200
+        body = response.json()
+        assert [r["name"] for r in body["rows"]] == ["CHF Fund"]
+        assert len(body["fxErrors"]) == 1
+        assert body["fxErrors"][0]["currency"] == "USD"
+        assert set(body["fxErrors"][0]["affectedInvestments"]) == {"USD Fund A", "USD Fund B"}
+
     def test_returns_all_zeros_for_empty_input(self, authed_client: TestClient) -> None:
         response = authed_client.get("/passive-rollup")
         assert response.status_code == 200

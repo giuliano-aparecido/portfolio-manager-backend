@@ -34,7 +34,7 @@ def compute_passive_rollup(db: Session, user_id: str | None = None, *, force_ref
 
     distinct_currencies = list({inv.currency for inv in investments})
     fx_rate_by_currency: dict[str, float] = {}
-    fx_errors: list[PassiveFxError] = []
+    fx_error_by_currency: dict[str, str] = {}
 
     def fetch_fx(ccy: str) -> tuple[str, float | None, str | None]:
         try:
@@ -48,12 +48,19 @@ def compute_passive_rollup(db: Session, user_id: str | None = None, *, force_ref
                 if rate is not None:
                     fx_rate_by_currency[ccy] = rate
                 else:
-                    fx_errors.append(PassiveFxError(currency=ccy, error=error))
+                    fx_error_by_currency[ccy] = error
+
+    # Built from the actual investments being dropped below, rather than
+    # guessed from `distinct_currencies` up front, so the reported list is
+    # exactly which rows are missing from the totals — not just which
+    # currencies failed.
+    affected_investments_by_currency: dict[str, list[str]] = defaultdict(list)
 
     rows: list[PassiveInvestmentRollupRow] = []
     for inv in investments:
         fx_rate = fx_rate_by_currency.get(inv.currency)
         if fx_rate is None:
+            affected_investments_by_currency[inv.currency].append(inv.name)
             continue
 
         cost_basis_native = compute_net_balance(
@@ -85,6 +92,11 @@ def compute_passive_rollup(db: Session, user_id: str | None = None, *, force_ref
                 notes=inv.notes,
             )
         )
+
+    fx_errors = [
+        PassiveFxError(currency=ccy, error=error, affected_investments=affected_investments_by_currency[ccy])
+        for ccy, error in fx_error_by_currency.items()
+    ]
 
     return PassiveRollup(
         rows=rows,

@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import PassiveInvestment, PassiveRecurringDeposit, PassiveTransaction
+from app.services.locking import lock_passive_investment
 
 MAX_OCCURRENCES_PER_PASS = 520  # ~10 years of WEEKLY, the densest frequency
 MAX_SCAN_ITERATIONS = 20000  # hard backstop on total loop iterations
@@ -102,6 +103,16 @@ def materialize_due_recurring_deposits(
 
     rules = db.scalars(query).all()
     for rule in rules:
+        # Acquired before re-reading last_generated_date below (not just
+        # before the write) — otherwise two concurrent calls (e.g. two
+        # browser tabs open on the rollup page) could each read the same
+        # last_generated_date, compute the same "due" occurrences, and both
+        # insert them, double-counting deposits in the ledger. Blocking here
+        # means the second caller only proceeds once the first has
+        # committed, then db.refresh sees that commit's updated value.
+        lock_passive_investment(db, rule.passive_investment_id)
+        db.refresh(rule)
+
         due = compute_due_occurrences(rule.start_date, rule.frequency, rule.last_generated_date, until, rule.end_date)
         if not due:
             continue
