@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.exceptions import AppError, app_error_handler, validation_error_handler
 from app.routers import (
+    auth,
     passive_investments,
     passive_recurring_deposit,
     passive_rollup,
@@ -30,6 +31,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(AppError, app_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
 
+    app.include_router(auth.router)
     app.include_router(portfolio_tickers.router)
     app.include_router(portfolio_transactions.router)
     app.include_router(portfolio_rollup.router)
