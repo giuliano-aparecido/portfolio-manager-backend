@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -69,7 +70,13 @@ def create_recurring_deposit(
     parsed = _parse_and_validate(body)
     row = PassiveRecurringDeposit(passive_investment_id=inv_id, last_generated_date=None, **parsed)
     db.add(row)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if "uq_passive_recurring_deposits_passive_investment_id" in str(exc.orig):
+            raise AppError(409, "A recurring deposit rule already exists for this investment") from exc
+        raise AppError(500, "Failed to create recurring deposit") from exc
     db.refresh(row)
     return row
 

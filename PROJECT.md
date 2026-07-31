@@ -73,6 +73,15 @@ Six tables:
   schedule attached to a PassiveInvestment (weekly/monthly/yearly, with an
   optional end date).
 
+Monetary fields throughout (`quantity`, `price_per_share`, `cash_amount`,
+`fx_rate_to_chf`, `amount_native`, `gain_loss_pct`) are `Float`
+(double-precision), not `Numeric`/`Decimal`. This is a known tradeoff for
+financial data — deliberately accepted here rather than overlooked: the
+FIFO and ledger code already treat exact equality as unsafe and compare
+against a `TOLERANCE` epsilon everywhere it matters (`services/fifo.py`),
+so float drift is handled defensively rather than assumed away. `Decimal`
+would be the more conventional choice for a production financial system.
+
 ## Key business logic, in more detail
 
 **FIFO cost basis** (`services/fifo.py`): BUY and DRIP transactions push a

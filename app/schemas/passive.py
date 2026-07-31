@@ -22,7 +22,6 @@ class PassiveInvestmentUpdateRequest(CamelModel):
 
 class PassiveInvestmentOut(CamelModel):
     id: int
-    user_id: str
     name: str
     type: str
     currency: str

@@ -1,8 +1,9 @@
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy.orm import Session
 
-from app.models import PassiveInvestment
+from app.models import PassiveInvestment, PassiveTransaction
 from app.schemas.passive import PassiveFxError, PassiveInvestmentRollupRow, PassiveRollup
 from app.services.ledger import PassiveLedgerTxn, compute_net_balance
 from app.services.price_service import fetch_fx_rate_to_chf
@@ -17,6 +18,19 @@ def compute_passive_rollup(db: Session, user_id: str | None = None, *, force_ref
     if user_id:
         query = query.filter(PassiveInvestment.user_id == user_id)
     investments = query.all()
+
+    # Bulk-queried and grouped in Python rather than relying on
+    # inv.transactions' lazy load per iteration below - matches
+    # portfolio_rollup_service.py's approach, avoiding an extra SELECT per
+    # investment.
+    txn_query = db.query(PassiveTransaction)
+    if investments:
+        txn_query = txn_query.filter(
+            PassiveTransaction.passive_investment_id.in_([inv.id for inv in investments])
+        )
+    transactions_by_investment: dict[int, list[PassiveTransaction]] = defaultdict(list)
+    for t in txn_query.all():
+        transactions_by_investment[t.passive_investment_id].append(t)
 
     distinct_currencies = list({inv.currency for inv in investments})
     fx_rate_by_currency: dict[str, float] = {}
@@ -43,7 +57,10 @@ def compute_passive_rollup(db: Session, user_id: str | None = None, *, force_ref
             continue
 
         cost_basis_native = compute_net_balance(
-            [PassiveLedgerTxn(date=t.date, type=t.type, amount_native=t.amount_native) for t in inv.transactions]
+            [
+                PassiveLedgerTxn(date=t.date, type=t.type, amount_native=t.amount_native)
+                for t in transactions_by_investment[inv.id]
+            ]
         )
         market_value_native = (
             cost_basis_native * (1 + inv.gain_loss_pct / 100) if inv.gain_loss_pct is not None else cost_basis_native

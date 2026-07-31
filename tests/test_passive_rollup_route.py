@@ -48,3 +48,21 @@ class TestPassiveRollupRoute:
 
         authed_client.get("/passive-rollup?refresh=true")
         assert received["force_refresh"] is True
+
+    def test_unexpected_exception_returns_generic_message_not_the_raw_text(
+        self, authed_client: TestClient, monkeypatch
+    ) -> None:
+        # This route has no expected-error case of its own (FX failures are
+        # already caught per-currency inside compute_passive_rollup), so
+        # anything reaching this handler is unexpected and must never leak
+        # its raw message - e.g. a DB driver error can embed the connection
+        # string.
+        def raise_sensitive(db, user_id, force_refresh=False):
+            raise ValueError("connection to server at postgresql://user:supersecret@host failed")
+
+        monkeypatch.setattr("app.routers.passive_rollup.compute_passive_rollup", raise_sensitive)
+
+        response = authed_client.get("/passive-rollup")
+        assert response.status_code == 500
+        assert response.json() == {"error": "Internal server error"}
+        assert "supersecret" not in response.text

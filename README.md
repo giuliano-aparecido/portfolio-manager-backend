@@ -24,7 +24,7 @@ Alembic, and pytest. It serves
 ## Local development
 
 ```bash
-docker compose up -d          # Postgres on localhost:5432
+docker compose up -d          # Postgres on localhost:5433
 cp .env.example .env          # fill in NEXTAUTH_SECRET
 pip install -r requirements-dev.txt
 uvicorn app.main:app --reload

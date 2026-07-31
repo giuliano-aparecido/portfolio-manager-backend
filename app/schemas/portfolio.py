@@ -25,7 +25,6 @@ class TickerUpdateRequest(CamelModel):
 
 class TickerOut(CamelModel):
     id: int
-    user_id: str
     ticker: str
     market: str
     category: str
@@ -58,7 +57,6 @@ class TransactionUpdateRequest(CamelModel):
 
 class TransactionOut(CamelModel):
     id: int
-    user_id: str
     ticker: str
     date: datetime
     type: str
