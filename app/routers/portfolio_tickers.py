@@ -60,9 +60,8 @@ def get_ticker_detail(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_authenticated_user_id),
 ) -> TickerDetail:
-    # Fixed vs. the original: this route previously had no auth check at
-    # all and never scoped by user — a cross-tenant data leak. Now requires
-    # auth and always scopes by the authenticated user.
+    # Always scoped by the authenticated user — never returns another
+    # user's ticker data.
     ticker = ticker.upper()
     detail = compute_ticker_detail(db, ticker, user_id)
     if detail is None:

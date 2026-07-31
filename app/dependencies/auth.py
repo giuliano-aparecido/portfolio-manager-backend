@@ -16,8 +16,7 @@ def get_authenticated_user_id(
     authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> str:
-    """Single auth gate used by every route — mirrors the original Next.js
-    app's lib/auth-helper.ts exactly:
+    """Single auth gate used by every route:
 
     - development/test: auto-provision/look up a fixed dev@local.test user,
       no real auth check at all.

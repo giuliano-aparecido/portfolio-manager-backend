@@ -17,5 +17,5 @@ def get_passive_rollup(
 ) -> PassiveRollup:
     try:
         return compute_passive_rollup(db, user_id)
-    except Exception as exc:  # noqa: BLE001 — surfaces the raw message, matching the original route
+    except Exception as exc:  # noqa: BLE001 — surfaces the raw message rather than a generic one
         raise AppError(500, str(exc)) from exc

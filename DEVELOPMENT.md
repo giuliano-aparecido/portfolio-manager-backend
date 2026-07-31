@@ -34,8 +34,8 @@ kicks in when `ENVIRONMENT=production`.
 | `FRONTEND_ORIGIN` | Allowed CORS origin | `http://localhost:3000` |
 
 Local Postgres runs on port **5433**, not 5432 — this is deliberate, to
-avoid colliding with the original Node app's own Postgres container if
-it's running on the same machine.
+avoid colliding with another Postgres container that might already be
+running on 5432 on the same machine.
 
 ## Database migrations (Alembic)
 

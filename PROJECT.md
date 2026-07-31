@@ -3,12 +3,8 @@
 ## What this is
 
 A REST API for tracking a multi-currency personal investment portfolio,
-with CHF as the base currency. It's a from-scratch Python/FastAPI port of
-the backend half of [`MyPortfolio`](https://github.com/GiulianoAparecido/MyPortfolio)
-(originally Next.js/TypeScript/Prisma), serving
+with CHF as the base currency, serving
 [`portfolio-manager-frontend`](https://github.com/GiulianoAparecido/portfolio-manager-frontend).
-The original Node.js app remains live and unchanged — this is a parallel
-rewrite, not a replacement in place.
 
 Two portfolio types are tracked, with different data models because they
 behave differently:
@@ -46,7 +42,6 @@ app/
     passive_detail.py, passive_rollup_service.py    Passive detail/rollup computation
 alembic/              Database migrations
 tests/                pytest, run against a real Postgres database (not mocks)
-scripts/migrate_data.py   One-off ETL from the original app's Prisma schema
 ```
 
 The routers are deliberately thin. Every business rule — FIFO consumption
@@ -85,8 +80,9 @@ lot onto a queue; SELL consumes the oldest lots first. Each unit sold uses
 *that lot's own* historical `fx_rate_to_chf` for its CHF cost basis, never
 today's rate — so realized gains reflect the FX rate that was actually in
 effect when the shares were bought. DRIP-originated lots are excluded from
-realized-gain cost basis calculations by design (see Deviations below for
-why this matters less than it sounds).
+realized-gain cost basis calculations by design — a DRIP reinvestment is
+modeled as its own BUY at the reinvestment price, so its cost basis is
+already correctly captured there.
 
 **Passive ledger** (`services/ledger.py`): cost basis is simply the net of
 all deposits minus withdrawals. A separate integrity check rejects any
@@ -107,21 +103,17 @@ failure for one ticker never fails the whole rollup or falls back to a
 stale value — it's recorded as a per-ticker error, and that ticker is
 excluded from portfolio totals until the next successful fetch.
 
-## Deviations from the original Next.js app
+## Auth consistency
 
-Two bugs were found and fixed during the port rather than carried over
-silently:
+Every route goes through the same `get_authenticated_user_id` dependency
+rather than duplicating an auth check per-route, which keeps behavior
+uniform across the whole API:
 
-- `GET /portfolio/tickers/{ticker}` previously had no auth check and
-  didn't scope by user — a cross-tenant data leak. Now requires auth and
-  scopes by the authenticated user.
-- `PUT`/`DELETE /portfolio/tickers/{ticker}` previously fell through to a
-  generic 500 on auth failure instead of 401 like every other route. Now
-  standardized — every route goes through the same auth dependency.
-
-Both fixes were essentially free: they fell out of routing every handler
-through one shared `get_authenticated_user_id` dependency instead of
-duplicating auth checks per-route.
+- Every route requires authentication and scopes its query by the
+  authenticated user — there's no route that reads or writes data without
+  checking whose it is.
+- Auth failure always returns 401, consistently, rather than some routes
+  401-ing and others falling through to a generic 500.
 
 ## Authentication model
 

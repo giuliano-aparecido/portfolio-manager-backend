@@ -1,18 +1,14 @@
 # Portfolio Manager — Backend
 
-Python/FastAPI rewrite of the backend for a multi-currency investment
-portfolio tracker (FIFO cost basis, live Yahoo Finance pricing, a
-manual-gain/loss passive-investment ledger with recurring deposits).
-
-Originally built in Next.js/TypeScript/Prisma — this is a from-scratch port
-to Python (SQLAlchemy, Alembic, pytest) as a learning project and the
-backend for [`portfolio-manager-frontend`](https://github.com/GiulianoAparecido/portfolio-manager-frontend).
-The original Node.js app remains live and unchanged at
-[`MyPortfolio`](https://github.com/GiulianoAparecido/MyPortfolio).
+A Python/FastAPI backend for a multi-currency investment portfolio tracker
+(FIFO cost basis, live Yahoo Finance pricing, a manual-gain/loss
+passive-investment ledger with recurring deposits), built with SQLAlchemy,
+Alembic, and pytest. It serves
+[`portfolio-manager-frontend`](https://github.com/GiulianoAparecido/portfolio-manager-frontend).
 
 ## Documentation
 
-- [`PROJECT.md`](PROJECT.md) — architecture, data model, business logic, deviations from the original app
+- [`PROJECT.md`](PROJECT.md) — architecture, data model, business logic
 - [`DEVELOPMENT.md`](DEVELOPMENT.md) — full local setup, environment variables, migrations, testing
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — branching, PR expectations, code style
 
@@ -44,29 +40,15 @@ pytest
 
 ## Deployment
 
-Render (backend, prod only) + Vercel (frontend, prod only) + the **same
-Neon project the original Node app already uses** — no separate project was
-provisioned for this rewrite. `alembic upgrade head` creates this app's
-snake_case tables (`users`, `portfolio_transactions`, ...) fresh in each
-branch; they coexist safely alongside the old app's PascalCase-quoted
-Prisma tables (`"User"`, `"PortfolioTransaction"`, ...) in the same
-database, since the table names never collide.
+Render (backend, prod only) + Vercel (frontend, prod only) + Neon
+Postgres. This database is also used by another application, with its own
+tables — this app's tables are all snake_case (`users`,
+`portfolio_transactions`, ...) specifically so they never collide with
+that application's differently-cased table names.
 
-`scripts/migrate_data.py` is a one-off script that copies the existing rows
-from the old Prisma tables into this app's schema (same database, explicit
-column mapping, IDs preserved verbatim, UTC-correct timestamp handling,
-one transaction, safe to re-run via `ON CONFLICT DO NOTHING`). Already run
-once against prod — verified via row-count parity and a rollup-output
-diff against the live Node app's numbers (cost basis, dividends, and
-realized gains matched exactly; market value differed only by the live
-price movement between the two independent measurements).
+## Auth consistency
 
-## Deviations from the original Next.js app
-
-Found during the port and fixed rather than carried over:
-- `GET /portfolio/tickers/{ticker}` previously had no auth check and didn't
-  scope by user (cross-tenant data leak). Now requires auth and scopes by
-  the authenticated user.
-- `PUT`/`DELETE /portfolio/tickers/{ticker}` previously fell through to a
-  generic 500 on auth failure instead of 401 like every other route. Now
-  standardized.
+Every route goes through the same `get_authenticated_user_id` dependency,
+so auth behavior is uniform across the whole API: every route requires
+authentication, scopes its query by the authenticated user, and returns a
+401 (not a 500 or an unscoped result) on auth failure.
