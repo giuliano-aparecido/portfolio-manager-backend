@@ -10,6 +10,12 @@ backend for [`portfolio-manager-frontend`](https://github.com/GiulianoAparecido/
 The original Node.js app remains live and unchanged at
 [`MyPortfolio`](https://github.com/GiulianoAparecido/MyPortfolio).
 
+## Documentation
+
+- [`PROJECT.md`](PROJECT.md) — architecture, data model, business logic, deviations from the original app
+- [`DEVELOPMENT.md`](DEVELOPMENT.md) — full local setup, environment variables, migrations, testing
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — branching, PR expectations, code style
+
 ## Stack
 
 - **FastAPI** — API framework
