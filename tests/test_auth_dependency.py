@@ -85,11 +85,15 @@ class TestProductionMode:
 
     def test_accepts_valid_token_for_existing_user(self, db_session: Session, monkeypatch) -> None:
         monkeypatch.setattr("app.dependencies.auth.get_settings", lambda: make_settings("production"))
-        existing = User(email="giuliano.aparecido@gmail.com", name="Giuliano")
+        # A generic fixture email, deliberately not a real address - a
+        # previous version of this test hardcoded a real one, which broke
+        # the moment a local database got seeded with actual production
+        # data sharing that same (unique) email.
+        existing = User(email="allowed-user@example.com", name="Allowed User")
         db_session.add(existing)
         db_session.flush()
 
-        token = make_token("giuliano.aparecido@gmail.com")
+        token = make_token("allowed-user@example.com")
         user_id = get_authenticated_user_id(authorization=f"Bearer {token}", db=db_session)
 
         assert user_id == existing.id
