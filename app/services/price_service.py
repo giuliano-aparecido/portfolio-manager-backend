@@ -11,12 +11,39 @@ Two porting risks worth knowing about:
   below rely on Python correctly comparing aware datetimes across timezones,
   which works, but every `date` passed in here must be tz-aware (never
   naive) or the comparison raises.
+
+`fetch_current_price`/`fetch_fx_rate_to_chf` are wrapped in a short (20s)
+in-memory TTL cache. This isn't about staleness tolerance so much as
+concurrency: a portfolio rollup fans out one yfinance call per open ticker
+(plus one per distinct currency) via a thread pool, and under CPU-limited
+hosting (observed: Render's free tier) that fan-out doesn't achieve real
+parallelism — total latency degrades toward the *sum* of each call's
+latency rather than the max. The cache doesn't fix that underlying
+concurrency ceiling, but it does mean a page reload or the frontend's
+auto-refresh within the same ~20s window reuses already-fetched quotes
+instead of repeating the full fan-out.
 """
 
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import yfinance as yf
+
+_CACHE_TTL_SECONDS = 20.0
+_cache_lock = threading.Lock()
+_price_cache: dict[str, tuple[float, "PriceQuote"]] = {}
+_fx_cache: dict[str, tuple[float, float]] = {}
+
+
+def clear_quote_cache() -> None:
+    """Test-only: the module-level cache otherwise persists across test
+    cases within the same pytest process, which would leak a mocked quote
+    from one test into another test reusing the same ticker/currency."""
+    with _cache_lock:
+        _price_cache.clear()
+        _fx_cache.clear()
 
 
 @dataclass
@@ -30,6 +57,20 @@ class PriceQuote:
 
 
 def fetch_current_price(yahoo_ticker: str) -> PriceQuote:
+    now = time.monotonic()
+    with _cache_lock:
+        cached = _price_cache.get(yahoo_ticker)
+        if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
+            return cached[1]
+
+    quote = _fetch_current_price_uncached(yahoo_ticker)
+
+    with _cache_lock:
+        _price_cache[yahoo_ticker] = (now, quote)
+    return quote
+
+
+def _fetch_current_price_uncached(yahoo_ticker: str) -> PriceQuote:
     ticker = yf.Ticker(yahoo_ticker)
     fast = ticker.fast_info
 
@@ -75,10 +116,20 @@ def fetch_current_price(yahoo_ticker: str) -> PriceQuote:
 def fetch_fx_rate_to_chf(native_currency: str) -> float:
     if native_currency == "CHF":
         return 1.0
+
+    now = time.monotonic()
+    with _cache_lock:
+        cached = _fx_cache.get(native_currency)
+        if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
+            return cached[1]
+
     ticker = yf.Ticker(f"{native_currency}CHF=X")
     rate = ticker.fast_info.get("lastPrice")
     if not rate or rate <= 0:
         raise RuntimeError(f"No valid FX rate from Yahoo Finance for {native_currency}CHF=X")
+
+    with _cache_lock:
+        _fx_cache[native_currency] = (now, rate)
     return rate
 
 

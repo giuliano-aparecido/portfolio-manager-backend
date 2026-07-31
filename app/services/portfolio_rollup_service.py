@@ -75,30 +75,16 @@ def compute_portfolio_rollup(db: Session, user_id: str | None = None) -> Portfol
             }
         )
 
-    # --- second pass (I/O), fetched in parallel ---
-    distinct_currencies = list({c["native_currency"] for c in open_candidates})
-    fx_rate_by_currency: dict[str, float] = {}
-
-    def fetch_fx(ccy: str) -> tuple[str, float | None]:
-        try:
-            return ccy, fetch_fx_rate_to_chf(ccy)
-        except Exception:  # noqa: BLE001 — left unset, surfaced later per-ticker
-            return ccy, None
-
-    if distinct_currencies:
-        with ThreadPoolExecutor(max_workers=len(distinct_currencies)) as pool:
-            for ccy, rate in pool.map(fetch_fx, distinct_currencies):
-                if rate is not None:
-                    fx_rate_by_currency[ccy] = rate
-
+    # --- second pass (I/O), fetched in parallel. FX and price fetches run in
+    # the same pool — fetch_fx_rate_to_chf is itself cached/deduplicated per
+    # currency (see price_service.py), so there's no need for a separate
+    # pre-fetch stage before this one. ---
     open_tickers: list[OpenTickerRollup] = []
     price_errors: list[TickerPriceError] = []
 
     def fetch_open_ticker(candidate: dict) -> tuple[OpenTickerRollup | None, TickerPriceError | None]:
         try:
-            fx_rate = fx_rate_by_currency.get(candidate["native_currency"])
-            if fx_rate is None:
-                raise RuntimeError(f"No FX rate available for {candidate['native_currency']}CHF=X")
+            fx_rate = fetch_fx_rate_to_chf(candidate["native_currency"])
             quote = fetch_current_price(candidate["yahoo_ticker"])
             market_value_native = candidate["current_shares"] * quote.price
             market_value_chf = market_value_native * fx_rate
