@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import engine, get_db
 from app.dependencies.auth import get_authenticated_user_id
-from app.main import app
+from app.main import app, limiter
 from app.models import User
 from app.services.price_service import clear_quote_cache
 
@@ -19,6 +19,18 @@ def _clear_quote_cache() -> Generator[None, None, None]:
     clear_quote_cache()
     yield
     clear_quote_cache()
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter() -> Generator[None, None, None]:
+    # The rate limiter's in-memory counters are shared module-level state
+    # (like the quote cache above) - without resetting between tests, route
+    # tests that call the same endpoint several times would eventually trip
+    # each other's counters depending on run order, rather than each test
+    # starting from a clean slate.
+    limiter.reset()
+    yield
+    limiter.reset()
 
 
 @pytest.fixture

@@ -1,6 +1,10 @@
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 
 from app.config import get_settings
 from app.exceptions import AppError, app_error_handler, validation_error_handler
@@ -15,10 +19,30 @@ from app.routers import (
     portfolio_transactions,
 )
 
+# Applies to every route via default_limits, no per-route decorators needed.
+# Keyed by client IP - see the Dockerfile's --proxy-headers flag, without
+# which every request behind Render's proxy would share one IP and thus one
+# bucket. 60/minute comfortably covers real usage (a handful of page loads
+# and refreshes per session) while still capping abusive/bot traffic - the
+# real risk on a personal, allowlist-gated app is a leaked token spamming
+# the yfinance-backed endpoints (Yahoo can rate-limit or block the whole
+# outbound IP for that) or bots probing public URLs and burning Render's
+# free-tier compute, not deliberate multi-user abuse.
+limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+
 
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="Portfolio Manager API")
+
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    # Added before CORSMiddleware so CORS ends up as the outer layer (see
+    # Starlette's add_middleware/build_middleware_stack: whichever is added
+    # last wraps outermost) - otherwise a 429 response would be missing
+    # CORS headers, and the browser would surface it as an opaque network
+    # error instead of a readable 429.
+    app.add_middleware(SlowAPIMiddleware)
 
     app.add_middleware(
         CORSMiddleware,

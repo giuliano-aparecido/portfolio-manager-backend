@@ -8,3 +8,4 @@ pydantic-settings>=2.5
 pyjwt>=2.9
 yfinance>=0.2.43
 pandas>=2.2
+slowapi>=0.1.9
