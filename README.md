@@ -52,3 +52,14 @@ Every route goes through the same `get_authenticated_user_id` dependency,
 so auth behavior is uniform across the whole API: every route requires
 authentication, scopes its query by the authenticated user, and returns a
 401 (not a 500 or an unscoped result) on auth failure.
+
+## Rate limiting
+
+Every route is limited to 60 requests/minute per client IP
+([`slowapi`](https://github.com/laurentS/slowapi), in-memory, no Redis
+needed for a single instance). Client IP is read from `X-Forwarded-For`
+(the Dockerfile passes `--proxy-headers` to uvicorn for this — Render, like
+most PaaS, puts the app behind a proxy, so without it every request would
+otherwise share the proxy's own IP and thus one rate-limit bucket for all
+traffic). A request over the limit gets `429 {"error": "Rate limit
+exceeded: ..."}`.

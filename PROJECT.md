@@ -124,3 +124,18 @@ existing row, or the request is rejected with 401. Nothing gets
 auto-created for an unrecognized email. In `development`/`test`
 environments, a fixed `dev@local.test` user is auto-provisioned instead,
 so local work never needs real Google OAuth credentials.
+
+## Rate limiting
+
+`app/main.py` wires a global `slowapi` `Limiter` (60 requests/minute per
+client IP, in-memory storage, applied to every route via `default_limits`
+rather than per-route decorators). On an app this small — an allowlist of
+one or two real users — the actual risk isn't coordinated multi-user
+abuse; it's a leaked token being used to hammer the yfinance-backed
+endpoints (which risks Yahoo Finance rate-limiting or blocking the whole
+outbound IP) or generic bot traffic probing public URLs and burning
+Render's free-tier compute. `SlowAPIMiddleware` is registered *before*
+`CORSMiddleware` so CORS ends up wrapping it as the outer layer — Starlette
+builds its middleware stack so whichever is added last wraps outermost —
+otherwise a 429 response would be missing CORS headers and a browser would
+report it as an opaque network error rather than a readable 429.
