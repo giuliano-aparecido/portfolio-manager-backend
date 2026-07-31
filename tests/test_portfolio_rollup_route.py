@@ -25,12 +25,12 @@ class TestPortfolioRollupRoute:
         add_ticker_and_buy(db_session, test_user)
         monkeypatch.setattr(
             "app.services.portfolio_rollup_service.fetch_current_price",
-            lambda yahoo_ticker: PriceQuote(
+            lambda yahoo_ticker, force_refresh=False: PriceQuote(
                 price=150.0, currency="USD", timestamp=datetime.now(timezone.utc), source="yahoo",
                 daily_change_percent=1.0, daily_change=1.5,
             ),
         )
-        monkeypatch.setattr("app.services.portfolio_rollup_service.fetch_fx_rate_to_chf", lambda ccy: 0.9)
+        monkeypatch.setattr("app.services.portfolio_rollup_service.fetch_fx_rate_to_chf", lambda ccy, force_refresh=False: 0.9)
 
         response = authed_client.get("/portfolio-rollup")
         assert response.status_code == 200
@@ -62,9 +62,9 @@ class TestPortfolioRollupRoute:
     ) -> None:
         add_ticker_and_buy(db_session, test_user, ticker="AAPL")
         add_ticker_and_buy(db_session, test_user, ticker="MSFT")
-        monkeypatch.setattr("app.services.portfolio_rollup_service.fetch_fx_rate_to_chf", lambda ccy: 0.9)
+        monkeypatch.setattr("app.services.portfolio_rollup_service.fetch_fx_rate_to_chf", lambda ccy, force_refresh=False: 0.9)
 
-        def fake_price(yahoo_ticker: str) -> PriceQuote:
+        def fake_price(yahoo_ticker: str, force_refresh: bool = False) -> PriceQuote:
             if yahoo_ticker == "MSFT":
                 raise RuntimeError("No valid price from Yahoo Finance for MSFT")
             return PriceQuote(price=150.0, currency="USD", timestamp=datetime.now(timezone.utc), source="yahoo", daily_change_percent=1.0, daily_change=1.5)
@@ -85,3 +85,26 @@ class TestPortfolioRollupRoute:
         assert body["openTickers"] == []
         assert body["closedTickers"] == []
         assert body["totalCostBasisCHF"] == 0
+
+    def test_refresh_query_param_is_threaded_through_as_force_refresh(
+        self, authed_client: TestClient, monkeypatch
+    ) -> None:
+        received: dict = {}
+
+        def fake_compute(db, user_id, *, force_refresh=False):
+            received["force_refresh"] = force_refresh
+            from app.schemas.portfolio import PortfolioRollup
+
+            return PortfolioRollup(
+                open_tickers=[], closed_tickers=[], price_errors=[],
+                total_cost_basis_chf=0, total_market_value_chf=0, total_unrealized_gain_chf=0,
+                total_dividends_chf=0, total_realized_gain_chf=0,
+            )
+
+        monkeypatch.setattr("app.routers.portfolio_rollup.compute_portfolio_rollup", fake_compute)
+
+        authed_client.get("/portfolio-rollup")
+        assert received["force_refresh"] is False
+
+        authed_client.get("/portfolio-rollup?refresh=true")
+        assert received["force_refresh"] is True

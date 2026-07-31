@@ -1,8 +1,7 @@
-"""Live price/FX fetching via yfinance — ported from lib/portfolio/price-service.ts
-(originally yahoo-finance2). The unofficial Yahoo Finance data source is the
-same across both ecosystems; only the client library differs.
+"""Live price/FX fetching via yfinance — an unofficial Yahoo Finance data
+source, no API key needed.
 
-Two porting risks worth knowing about:
+Two risks worth knowing about:
 - `Ticker.fast_info` key names have shifted across yfinance releases before
   and may again — if fetches start failing, check `Ticker(...).fast_info.keys()`
   against what's used here.
@@ -11,12 +10,48 @@ Two porting risks worth knowing about:
   below rely on Python correctly comparing aware datetimes across timezones,
   which works, but every `date` passed in here must be tz-aware (never
   naive) or the comparison raises.
+
+`fetch_current_price`/`fetch_fx_rate_to_chf` are wrapped in an in-memory
+TTL cache. This isn't about staleness tolerance so much as concurrency: a
+portfolio rollup fans out one yfinance call per open ticker (plus one per
+distinct currency) via a thread pool, and under CPU-limited hosting
+(observed: Render's free tier) that fan-out doesn't achieve real
+parallelism — total latency degrades toward the *sum* of each call's
+latency rather than the max. The cache doesn't fix that underlying
+concurrency ceiling, but it does mean repeated page loads/navigation
+within the TTL window reuse already-fetched quotes instead of repeating
+the full fan-out.
+
+The TTL (180s) is deliberately aligned with the frontend's shortest
+auto-refresh option (3 min) — short enough that an auto-refresh cycle
+always lands on an expired entry and gets genuinely live data, long
+enough that navigating between pages (which independently call
+/portfolio-rollup and /passive-rollup) reuses one fetch instead of
+repeating it per page. The frontend's explicit "Refresh" button passes
+`force_refresh=True` to bypass the cache entirely — clicking refresh
+must never silently return stale data.
 """
 
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import yfinance as yf
+
+_CACHE_TTL_SECONDS = 180.0
+_cache_lock = threading.Lock()
+_price_cache: dict[str, tuple[float, "PriceQuote"]] = {}
+_fx_cache: dict[str, tuple[float, float]] = {}
+
+
+def clear_quote_cache() -> None:
+    """Test-only: the module-level cache otherwise persists across test
+    cases within the same pytest process, which would leak a mocked quote
+    from one test into another test reusing the same ticker/currency."""
+    with _cache_lock:
+        _price_cache.clear()
+        _fx_cache.clear()
 
 
 @dataclass
@@ -29,7 +64,22 @@ class PriceQuote:
     daily_change: float
 
 
-def fetch_current_price(yahoo_ticker: str) -> PriceQuote:
+def fetch_current_price(yahoo_ticker: str, *, force_refresh: bool = False) -> PriceQuote:
+    now = time.monotonic()
+    if not force_refresh:
+        with _cache_lock:
+            cached = _price_cache.get(yahoo_ticker)
+            if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
+                return cached[1]
+
+    quote = _fetch_current_price_uncached(yahoo_ticker)
+
+    with _cache_lock:
+        _price_cache[yahoo_ticker] = (now, quote)
+    return quote
+
+
+def _fetch_current_price_uncached(yahoo_ticker: str) -> PriceQuote:
     ticker = yf.Ticker(yahoo_ticker)
     fast = ticker.fast_info
 
@@ -72,13 +122,24 @@ def fetch_current_price(yahoo_ticker: str) -> PriceQuote:
     )
 
 
-def fetch_fx_rate_to_chf(native_currency: str) -> float:
+def fetch_fx_rate_to_chf(native_currency: str, *, force_refresh: bool = False) -> float:
     if native_currency == "CHF":
         return 1.0
+
+    now = time.monotonic()
+    if not force_refresh:
+        with _cache_lock:
+            cached = _fx_cache.get(native_currency)
+            if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
+                return cached[1]
+
     ticker = yf.Ticker(f"{native_currency}CHF=X")
     rate = ticker.fast_info.get("lastPrice")
     if not rate or rate <= 0:
         raise RuntimeError(f"No valid FX rate from Yahoo Finance for {native_currency}CHF=X")
+
+    with _cache_lock:
+        _fx_cache[native_currency] = (now, rate)
     return rate
 
 

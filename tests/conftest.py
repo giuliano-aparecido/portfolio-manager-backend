@@ -8,6 +8,17 @@ from app.db.session import engine, get_db
 from app.dependencies.auth import get_authenticated_user_id
 from app.main import app
 from app.models import User
+from app.services.price_service import clear_quote_cache
+
+
+@pytest.fixture(autouse=True)
+def _clear_quote_cache() -> Generator[None, None, None]:
+    # price_service caches quotes across calls (see its module docstring).
+    # Different tests often reuse the same ticker/currency with different
+    # mocked values, so the cache must not leak between tests.
+    clear_quote_cache()
+    yield
+    clear_quote_cache()
 
 
 @pytest.fixture

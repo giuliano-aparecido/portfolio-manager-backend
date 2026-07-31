@@ -53,6 +53,76 @@ class TestFetchCurrentPrice:
         assert quote.price == 100.0
 
 
+class TestQuoteCache:
+    def test_repeated_price_fetch_within_ttl_reuses_cached_quote(self, monkeypatch) -> None:
+        ticker_ctor = MagicMock(return_value=fake_ticker({"lastPrice": 150.0, "currency": "USD", "previousClose": 145.0}))
+        monkeypatch.setattr(price_service.yf, "Ticker", ticker_ctor)
+
+        first = price_service.fetch_current_price("AAPL")
+        second = price_service.fetch_current_price("AAPL")
+
+        assert first.price == second.price == 150.0
+        ticker_ctor.assert_called_once()
+
+    def test_repeated_fx_fetch_within_ttl_reuses_cached_rate(self, monkeypatch) -> None:
+        ticker_ctor = MagicMock(return_value=fake_ticker({"lastPrice": 0.91}))
+        monkeypatch.setattr(price_service.yf, "Ticker", ticker_ctor)
+
+        assert price_service.fetch_fx_rate_to_chf("USD") == 0.91
+        assert price_service.fetch_fx_rate_to_chf("USD") == 0.91
+        ticker_ctor.assert_called_once()
+
+    def test_expired_cache_entry_triggers_a_fresh_fetch(self, monkeypatch) -> None:
+        ticker_ctor = MagicMock(return_value=fake_ticker({"lastPrice": 150.0, "currency": "USD", "previousClose": 145.0}))
+        monkeypatch.setattr(price_service.yf, "Ticker", ticker_ctor)
+        monkeypatch.setattr(price_service, "_CACHE_TTL_SECONDS", 0.0)
+
+        price_service.fetch_current_price("AAPL")
+        price_service.fetch_current_price("AAPL")
+
+        assert ticker_ctor.call_count == 2
+
+    def test_different_tickers_are_cached_independently(self, monkeypatch) -> None:
+        tickers = {
+            "AAPL": fake_ticker({"lastPrice": 150.0, "currency": "USD", "previousClose": 145.0}),
+            "MSFT": fake_ticker({"lastPrice": 300.0, "currency": "USD", "previousClose": 295.0}),
+        }
+        monkeypatch.setattr(price_service.yf, "Ticker", lambda t: tickers[t])
+
+        assert price_service.fetch_current_price("AAPL").price == 150.0
+        assert price_service.fetch_current_price("MSFT").price == 300.0
+
+    def test_force_refresh_bypasses_a_warm_price_cache(self, monkeypatch) -> None:
+        ticker_ctor = MagicMock(return_value=fake_ticker({"lastPrice": 150.0, "currency": "USD", "previousClose": 145.0}))
+        monkeypatch.setattr(price_service.yf, "Ticker", ticker_ctor)
+
+        price_service.fetch_current_price("AAPL")
+        price_service.fetch_current_price("AAPL", force_refresh=True)
+
+        assert ticker_ctor.call_count == 2
+
+    def test_force_refresh_bypasses_a_warm_fx_cache(self, monkeypatch) -> None:
+        ticker_ctor = MagicMock(return_value=fake_ticker({"lastPrice": 0.91}))
+        monkeypatch.setattr(price_service.yf, "Ticker", ticker_ctor)
+
+        price_service.fetch_fx_rate_to_chf("USD")
+        price_service.fetch_fx_rate_to_chf("USD", force_refresh=True)
+
+        assert ticker_ctor.call_count == 2
+
+    def test_force_refresh_still_repopulates_the_cache(self, monkeypatch) -> None:
+        # A force-refreshed value should still be cached afterward, so a
+        # subsequent normal (non-forced) call within the TTL reuses it
+        # rather than always re-fetching.
+        ticker_ctor = MagicMock(return_value=fake_ticker({"lastPrice": 150.0, "currency": "USD", "previousClose": 145.0}))
+        monkeypatch.setattr(price_service.yf, "Ticker", ticker_ctor)
+
+        price_service.fetch_current_price("AAPL", force_refresh=True)
+        price_service.fetch_current_price("AAPL")
+
+        assert ticker_ctor.call_count == 1
+
+
 class TestFetchFxRateToChf:
     def test_chf_shortcut_makes_no_network_call(self, monkeypatch) -> None:
         ticker_ctor = MagicMock()
