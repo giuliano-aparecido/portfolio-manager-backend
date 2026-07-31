@@ -1,5 +1,3 @@
-"""Ported from lib/portfolio/validation.ts."""
-
 from app.services.ticker_config import CATEGORIES, MARKETS
 
 CURRENCIES = ["USD", "CHF", "GBP", "CAD", "SGD", "EUR"]

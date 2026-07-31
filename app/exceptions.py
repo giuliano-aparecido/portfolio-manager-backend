@@ -4,9 +4,8 @@ from fastapi.responses import JSONResponse
 
 
 class AppError(Exception):
-    """Generic {"error": "..."} + status code — every route in the original
-    Next.js app returns this exact JSON shape on failure, not FastAPI's
-    default {"detail": ...}.
+    """Generic {"error": "..."} + status code — every route returns this
+    exact JSON shape on failure, not FastAPI's default {"detail": ...}.
     """
 
     def __init__(self, status_code: int, message: str) -> None:
@@ -34,8 +33,8 @@ async def validation_error_handler(_request: Request, exc: RequestValidationErro
     documented, hand-validated error cases (e.g. a field that's a JSON
     object where a number was expected) — keeps the {"error": ...} envelope
     consistent instead of leaking FastAPI's default {"detail": [...]}
-    shape, even though the message text won't match a specific original
-    error string in these edge cases.
+    shape, even though the message text is generic rather than a specific
+    hand-written error string in these edge cases.
     """
     first = exc.errors()[0]
     field = ".".join(str(p) for p in first["loc"] if p != "body")

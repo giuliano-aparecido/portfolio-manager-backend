@@ -7,8 +7,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # "development" | "test" | "production" — development/test auto-provision
-    # a fixed dev@local.test user with no real auth check, mirroring the
-    # original Next.js app's lib/auth-helper.ts behavior exactly.
+    # a fixed dev@local.test user with no real auth check, so local/CI work
+    # never needs real Google OAuth credentials.
     environment: str = "development"
 
     database_url: str = "postgresql://portfolio:portfolio-dev-password@localhost:5433/portfolio"

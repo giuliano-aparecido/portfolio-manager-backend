@@ -1,9 +1,9 @@
 from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
 
-# Deterministic constraint names so Alembic autogenerate diffs stay clean and
-# greppable — Prisma's auto-generated Postgres constraint names never gave
-# us this.
+# Deterministic constraint names so Alembic autogenerate diffs stay clean
+# and greppable, rather than relying on SQLAlchemy's own auto-generated
+# defaults.
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
     "uq": "uq_%(table_name)s_%(column_0_name)s",

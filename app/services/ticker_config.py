@@ -1,7 +1,6 @@
-"""Hardcoded configuration table for the 21 tickers imported from the
-original spreadsheet CSVs — ported verbatim from lib/portfolio/ticker-config.ts.
-Not derived from any market/suffix heuristic for these specific tickers
-(verified empirically against Yahoo Finance).
+"""Hardcoded configuration table for 21 tickers, originally imported from
+spreadsheet CSVs. Not derived from any market/suffix heuristic for these
+specific tickers (verified empirically against Yahoo Finance).
 """
 
 from dataclasses import dataclass

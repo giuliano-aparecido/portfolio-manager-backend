@@ -1,10 +1,7 @@
-"""Ported from lib/portfolio/ticker-detail.ts.
-
-Deliberate fix vs. the original: GET /portfolio/tickers/{ticker} had no
-auth check at all and never scoped by user (a cross-tenant data leak) —
-this port always requires and scopes by user_id, so this function's
-`user_id` parameter is non-optional (unlike the rollup functions, which
-kept an optional userId for internal/unscoped use).
+"""GET /portfolio/tickers/{ticker} always requires and scopes by user_id
+to prevent a cross-tenant data leak, so this function's `user_id`
+parameter is non-optional (unlike the rollup functions, which keep an
+optional user_id for internal/unscoped use).
 """
 
 from sqlalchemy.orm import Session

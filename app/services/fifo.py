@@ -1,7 +1,6 @@
-"""FIFO cost-basis engine — ported verbatim from the original TypeScript
-lib/portfolio/fifo.ts. Distinct fields per transaction type (rather than
-one generic "shares" field) is the whole point: it's what prevents dividend
-cash from being mistaken for a share quantity.
+"""FIFO cost-basis engine. Distinct fields per transaction type (rather
+than one generic "shares" field) is the whole point: it's what prevents
+dividend cash from being mistaken for a share quantity.
 """
 
 from dataclasses import dataclass, field

@@ -1,5 +1,3 @@
-"""Ported from lib/passive/detail.ts."""
-
 from sqlalchemy.orm import Session
 
 from app.models import PassiveInvestment, PassiveRecurringDeposit, PassiveTransaction

@@ -1,0 +1,96 @@
+# Development Guide
+
+## Requirements
+
+- Python 3.11+
+- Docker & Docker Compose (for local Postgres)
+
+## First-time setup
+
+```bash
+docker compose up -d                     # Postgres on localhost:5433
+cp .env.example .env                     # defaults work for local dev as-is
+python -m venv .venv
+.venv/bin/activate                       # .venv\Scripts\activate on Windows
+pip install -r requirements-dev.txt
+alembic upgrade head                     # create the schema
+uvicorn app.main:app --reload
+```
+
+Health check: `GET http://localhost:8000/health`.
+
+In `development`/`test` environments, there's no need to authenticate at
+all — every request is treated as a fixed `dev@local.test` user, who is
+auto-created on first use. Real Google OAuth / JWT verification only
+kicks in when `ENVIRONMENT=production`.
+
+## Environment variables
+
+| Variable | Purpose | Local default |
+|---|---|---|
+| `ENVIRONMENT` | `development` \| `test` \| `production` — controls the auth behavior described above | `development` |
+| `DATABASE_URL` | Postgres connection string | local Docker Postgres on port 5433 |
+| `NEXTAUTH_SECRET` | Shared HMAC key with the frontend's session tokens — **must match exactly** in any environment where real auth matters | insecure dev placeholder |
+| `FRONTEND_ORIGIN` | Allowed CORS origin | `http://localhost:3000` |
+
+Local Postgres runs on port **5433**, not 5432 — this is deliberate, to
+avoid colliding with another Postgres container that might already be
+running on 5432 on the same machine.
+
+## Database migrations (Alembic)
+
+Schema changes go through Alembic, not manual SQL:
+
+```bash
+# after changing a model in app/models/
+alembic revision --autogenerate -m "describe the change"
+# review the generated migration file by hand before applying
+alembic upgrade head
+```
+
+`alembic/env.py` reads `DATABASE_URL` from the app's own settings, not
+`alembic.ini` — so there's exactly one place that config lives, whichever
+environment you're targeting. Point `DATABASE_URL` at the right database
+before running `alembic upgrade head` for that environment.
+
+## Tests
+
+```bash
+pytest
+```
+
+Tests run against a **real Postgres database**, not mocks or SQLite —
+every test wraps its work in a transaction that's rolled back afterward,
+so the database stays clean regardless of what a test does. The only
+thing that gets mocked is `yfinance` itself (live network calls to Yahoo
+Finance), via a `monkeypatch` fixture.
+
+If a test file needs to simulate a genuinely *unauthenticated* request,
+note that the default `client`/`authed_client` fixtures can't do this —
+both run under `ENVIRONMENT=development`/`test`, which auto-provisions a
+user rather than rejecting the request. Use a fixture that overrides the
+auth dependency to explicitly raise instead.
+
+## Adding a new business rule
+
+Business logic belongs in `app/services/`, not in a router. A router
+should only: parse/validate the request body, call a service function,
+and map the result (or a raised exception) to an HTTP response. This
+keeps every rule unit-testable without spinning up the HTTP layer at all
+— see any file in `tests/` for the pattern.
+
+## Manually verifying live price data
+
+`yfinance`'s exact field names have shifted across releases before (see
+the docstring at the top of `app/services/price_service.py`). If price
+fetches start failing after a dependency upgrade, the fastest way to
+check what changed is directly in a Python shell:
+
+```python
+import yfinance as yf
+yf.Ticker("AAPL").fast_info.keys()
+```
+
+There's no automated CI check for this — it's an external, unofficial API
+with no stability guarantee, so this needs a manual look after bumping
+the `yfinance` version.

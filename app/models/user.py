@@ -15,8 +15,9 @@ class User(Base):
     """Multi-user support and data isolation.
 
     id is an opaque string (uuid4 for new rows) rather than an autoincrement
-    int — this mirrors the original app's Prisma cuid() PK, which existing
-    migrated rows keep verbatim as opaque strings.
+    int, since some existing rows use a different opaque string ID format
+    and are treated identically — nothing about this model assumes any
+    particular string format.
     """
 
     __tablename__ = "users"

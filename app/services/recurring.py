@@ -29,7 +29,7 @@ def occurrence_date(start_date: datetime, frequency: str, n: int) -> datetime:
         return start_date + timedelta(days=7 * n)
 
     y = start_date.year
-    m0 = start_date.month - 1  # 0-indexed, matches the original's getUTCMonth()
+    m0 = start_date.month - 1  # 0-indexed, to make the month arithmetic below simpler
     d = start_date.day
 
     months_to_add = n if frequency == "MONTHLY" else n * 12
