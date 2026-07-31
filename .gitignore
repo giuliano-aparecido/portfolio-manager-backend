@@ -10,3 +10,7 @@ venv/
 htmlcov/
 .dev-server.log
 .dev-server.log.err
+
+# Personal dev utility, tied to this developer's own prod credentials/
+# workflow - not something that belongs in a shared repo.
+scripts/sync_from_prod.py

@@ -54,20 +54,6 @@ Local Postgres runs on port **5433**, not 5432 — this is deliberate, to
 avoid colliding with another Postgres container that might already be
 running on 5432 on the same machine.
 
-## Testing against real data locally
-
-`scripts/sync_from_prod.py` copies every row from a production database
-down to local Docker Postgres — same schema on both sides, so it's a
-plain table-by-table copy, no renaming. **Destructive to the local side
-only**: it truncates local tables first so the result is an exact mirror
-of prod, not a merge. Refuses to run unless `DATABASE_URL` (the
-destination) points at `localhost`.
-
-```bash
-SOURCE_DATABASE_URL=<prod connection string> \
-    python -m scripts.sync_from_prod [--dry-run]
-```
-
 ## Database migrations (Alembic)
 
 Schema changes go through Alembic, not manual SQL:
