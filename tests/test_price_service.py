@@ -27,6 +27,32 @@ class TestFetchCurrentPrice:
         assert quote.daily_change_percent == pytest.approx(5.0 / 145.0 * 100)
         assert quote.source == "yahoo"
 
+    def test_prefers_regular_market_previous_close_over_previous_close(self, monkeypatch) -> None:
+        # Regression test: fast_info["previousClose"] has been observed
+        # wrong (verified against yfinance's own get_info() and historical
+        # closes) while regularMarketPreviousClose matched the true prior
+        # close every time it was checked - e.g. AMZN showing a 5% gain
+        # instead of the real >15% because previousClose was stale/wrong.
+        ticker = fake_ticker({
+            "lastPrice": 271.33, "currency": "USD",
+            "previousClose": 257.95,  # wrong, per the observed real-world bug
+            "regularMarketPreviousClose": 235.50,  # correct
+        })
+        monkeypatch.setattr(price_service.yf, "Ticker", lambda _: ticker)
+
+        quote = price_service.fetch_current_price("AMZN")
+
+        assert quote.daily_change_percent == pytest.approx((271.33 - 235.50) / 235.50 * 100)
+        assert quote.daily_change_percent > 15
+
+    def test_falls_back_to_previous_close_when_regular_market_previous_close_missing(self, monkeypatch) -> None:
+        ticker = fake_ticker({"lastPrice": 150.0, "currency": "USD", "previousClose": 145.0})
+        monkeypatch.setattr(price_service.yf, "Ticker", lambda _: ticker)
+
+        quote = price_service.fetch_current_price("AAPL")
+
+        assert quote.daily_change_percent == pytest.approx(5.0 / 145.0 * 100)
+
     def test_gbp_pence_marker_divides_price_and_change_by_100(self, monkeypatch) -> None:
         ticker = fake_ticker({"lastPrice": 11440.0, "currency": "GBp", "previousClose": 11400.0})
         monkeypatch.setattr(price_service.yf, "Ticker", lambda _: ticker)

@@ -85,7 +85,15 @@ def _fetch_current_price_uncached(yahoo_ticker: str) -> PriceQuote:
 
     raw_price = fast.get("lastPrice")
     raw_currency = fast.get("currency")
-    previous_close = fast.get("previousClose") or fast.get("regularMarketPreviousClose")
+    # fast_info["previousClose"] is unreliable — verified against .get_info()
+    # (Yahoo's own regularMarketChangePercent) and historical closes across
+    # several tickers, it's sometimes off by a small amount and was observed
+    # wildly wrong for AMZN on a >15% single-day move (257.95 vs the real
+    # 235.5 prior close, understating the day's gain by two-thirds).
+    # regularMarketPreviousClose matched the true previous close every time
+    # it was checked — prefer it, falling back to previousClose only if it's
+    # ever missing.
+    previous_close = fast.get("regularMarketPreviousClose") or fast.get("previousClose")
 
     if not raw_price or raw_price <= 0:
         # Defensive fallback — fast_info has occasionally been missing a
