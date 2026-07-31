@@ -19,6 +19,23 @@ uvicorn app.main:app --reload
 
 Health check: `GET http://localhost:8000/health`.
 
+## Day-to-day start/stop
+
+After the first-time setup above, `scripts/start.ps1` and `scripts/stop.ps1`
+(Windows PowerShell) bring Postgres + the API up or down together in the
+background:
+
+```powershell
+.\scripts\start.ps1   # Postgres (Docker) + uvicorn, backgrounded, logs to .dev-server.log
+.\scripts\stop.ps1    # stops both cleanly
+```
+
+These run uvicorn *without* `--reload` — they're for quickly getting a
+working backend up (e.g. to test the frontend against), not active backend
+development. If you're editing backend code, run
+`uvicorn app.main:app --reload` directly in its own terminal instead so you
+get hot reload.
+
 In `development`/`test` environments, there's no need to authenticate at
 all — every request is treated as a fixed `dev@local.test` user, who is
 auto-created on first use. Real Google OAuth / JWT verification only
