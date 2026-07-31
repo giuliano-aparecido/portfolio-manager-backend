@@ -17,7 +17,7 @@ from app.services.ticker_config import derive_yahoo_ticker
 TOLERANCE = 1e-9
 
 
-def compute_portfolio_rollup(db: Session, user_id: str | None = None) -> PortfolioRollup:
+def compute_portfolio_rollup(db: Session, user_id: str | None = None, *, force_refresh: bool = False) -> PortfolioRollup:
     txn_query = db.query(PortfolioTransaction).order_by(PortfolioTransaction.date.asc())
     metadata_query = db.query(TickerMetadata)
     if user_id:
@@ -83,8 +83,8 @@ def compute_portfolio_rollup(db: Session, user_id: str | None = None) -> Portfol
 
     def fetch_open_ticker(candidate: dict) -> tuple[OpenTickerRollup | None, TickerPriceError | None]:
         try:
-            fx_rate = fetch_fx_rate_to_chf(candidate["native_currency"])
-            quote = fetch_current_price(candidate["yahoo_ticker"])
+            fx_rate = fetch_fx_rate_to_chf(candidate["native_currency"], force_refresh=force_refresh)
+            quote = fetch_current_price(candidate["yahoo_ticker"], force_refresh=force_refresh)
             market_value_native = candidate["current_shares"] * quote.price
             market_value_chf = market_value_native * fx_rate
             row = OpenTickerRollup(

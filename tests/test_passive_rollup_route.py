@@ -14,7 +14,7 @@ class TestPassiveRollupRoute:
         db_session.add(PassiveTransaction(passive_investment_id=inv.id, type="DEPOSIT", date=datetime(2024, 1, 1, tzinfo=timezone.utc), amount_native=1000))
         db_session.flush()
 
-        monkeypatch.setattr("app.services.passive_rollup_service.fetch_fx_rate_to_chf", lambda ccy: 0.9)
+        monkeypatch.setattr("app.services.passive_rollup_service.fetch_fx_rate_to_chf", lambda ccy, force_refresh=False: 0.9)
 
         response = authed_client.get("/passive-rollup")
         assert response.status_code == 200
@@ -29,3 +29,22 @@ class TestPassiveRollupRoute:
         body = response.json()
         assert body["rows"] == []
         assert body["totalCostBasisCHF"] == 0
+
+    def test_refresh_query_param_is_threaded_through_as_force_refresh(
+        self, authed_client: TestClient, monkeypatch
+    ) -> None:
+        received: dict = {}
+
+        def fake_compute(db, user_id, *, force_refresh=False):
+            received["force_refresh"] = force_refresh
+            from app.schemas.passive import PassiveRollup
+
+            return PassiveRollup(rows=[], fx_errors=[], total_cost_basis_chf=0, total_market_value_chf=0, total_unrealized_gain_chf=0)
+
+        monkeypatch.setattr("app.routers.passive_rollup.compute_passive_rollup", fake_compute)
+
+        authed_client.get("/passive-rollup")
+        assert received["force_refresh"] is False
+
+        authed_client.get("/passive-rollup?refresh=true")
+        assert received["force_refresh"] is True

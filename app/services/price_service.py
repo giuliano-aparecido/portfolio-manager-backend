@@ -11,16 +11,25 @@ Two risks worth knowing about:
   which works, but every `date` passed in here must be tz-aware (never
   naive) or the comparison raises.
 
-`fetch_current_price`/`fetch_fx_rate_to_chf` are wrapped in a short (20s)
-in-memory TTL cache. This isn't about staleness tolerance so much as
-concurrency: a portfolio rollup fans out one yfinance call per open ticker
-(plus one per distinct currency) via a thread pool, and under CPU-limited
-hosting (observed: Render's free tier) that fan-out doesn't achieve real
+`fetch_current_price`/`fetch_fx_rate_to_chf` are wrapped in an in-memory
+TTL cache. This isn't about staleness tolerance so much as concurrency: a
+portfolio rollup fans out one yfinance call per open ticker (plus one per
+distinct currency) via a thread pool, and under CPU-limited hosting
+(observed: Render's free tier) that fan-out doesn't achieve real
 parallelism — total latency degrades toward the *sum* of each call's
 latency rather than the max. The cache doesn't fix that underlying
-concurrency ceiling, but it does mean a page reload or the frontend's
-auto-refresh within the same ~20s window reuses already-fetched quotes
-instead of repeating the full fan-out.
+concurrency ceiling, but it does mean repeated page loads/navigation
+within the TTL window reuse already-fetched quotes instead of repeating
+the full fan-out.
+
+The TTL (180s) is deliberately aligned with the frontend's shortest
+auto-refresh option (3 min) — short enough that an auto-refresh cycle
+always lands on an expired entry and gets genuinely live data, long
+enough that navigating between pages (which independently call
+/portfolio-rollup and /passive-rollup) reuses one fetch instead of
+repeating it per page. The frontend's explicit "Refresh" button passes
+`force_refresh=True` to bypass the cache entirely — clicking refresh
+must never silently return stale data.
 """
 
 import threading
@@ -30,7 +39,7 @@ from datetime import datetime, timedelta, timezone
 
 import yfinance as yf
 
-_CACHE_TTL_SECONDS = 20.0
+_CACHE_TTL_SECONDS = 180.0
 _cache_lock = threading.Lock()
 _price_cache: dict[str, tuple[float, "PriceQuote"]] = {}
 _fx_cache: dict[str, tuple[float, float]] = {}
@@ -55,12 +64,13 @@ class PriceQuote:
     daily_change: float
 
 
-def fetch_current_price(yahoo_ticker: str) -> PriceQuote:
+def fetch_current_price(yahoo_ticker: str, *, force_refresh: bool = False) -> PriceQuote:
     now = time.monotonic()
-    with _cache_lock:
-        cached = _price_cache.get(yahoo_ticker)
-        if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
-            return cached[1]
+    if not force_refresh:
+        with _cache_lock:
+            cached = _price_cache.get(yahoo_ticker)
+            if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
+                return cached[1]
 
     quote = _fetch_current_price_uncached(yahoo_ticker)
 
@@ -112,15 +122,16 @@ def _fetch_current_price_uncached(yahoo_ticker: str) -> PriceQuote:
     )
 
 
-def fetch_fx_rate_to_chf(native_currency: str) -> float:
+def fetch_fx_rate_to_chf(native_currency: str, *, force_refresh: bool = False) -> float:
     if native_currency == "CHF":
         return 1.0
 
     now = time.monotonic()
-    with _cache_lock:
-        cached = _fx_cache.get(native_currency)
-        if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
-            return cached[1]
+    if not force_refresh:
+        with _cache_lock:
+            cached = _fx_cache.get(native_currency)
+            if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
+                return cached[1]
 
     ticker = yf.Ticker(f"{native_currency}CHF=X")
     rate = ticker.fast_info.get("lastPrice")
