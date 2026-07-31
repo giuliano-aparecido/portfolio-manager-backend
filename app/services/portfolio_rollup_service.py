@@ -9,12 +9,10 @@ from sqlalchemy.orm import Session
 
 from app.models import PortfolioTransaction, TickerMetadata
 from app.schemas.portfolio import ClosedTickerRollup, OpenTickerRollup, PortfolioRollup, TickerPriceError
-from app.services.fifo import process_ticker
+from app.services.fifo import TOLERANCE, process_ticker
 from app.services.mappers import portfolio_transaction_to_processed
 from app.services.price_service import fetch_current_price, fetch_fx_rate_to_chf
 from app.services.ticker_config import derive_yahoo_ticker
-
-TOLERANCE = 1e-9
 
 
 def compute_portfolio_rollup(db: Session, user_id: str | None = None, *, force_refresh: bool = False) -> PortfolioRollup:

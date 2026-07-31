@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -6,6 +8,8 @@ from app.dependencies.auth import get_authenticated_user_id
 from app.exceptions import AppError
 from app.schemas.passive import PassiveRollup
 from app.services.passive_rollup_service import compute_passive_rollup
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["passive-rollup"])
 
@@ -18,5 +22,10 @@ def get_passive_rollup(
 ) -> PassiveRollup:
     try:
         return compute_passive_rollup(db, user_id, force_refresh=refresh)
-    except Exception as exc:  # noqa: BLE001 — surfaces the raw message rather than a generic one
-        raise AppError(500, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — unexpected: this path has no
+        # expected-error case of its own (FX failures are already caught
+        # per-currency inside compute_passive_rollup). Not surfaced to the
+        # client: an unexpected exception here (e.g. a DB driver error) can
+        # embed connection details, which must never reach a response body.
+        logger.exception("Unexpected error computing passive rollup")
+        raise AppError(500, "Internal server error") from exc

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.services.fifo import ProcessedTransaction, process_ticker, validate_ticker
+from app.services.fifo import ProcessedTransaction, process_ticker
 
 
 def txn(
@@ -118,15 +118,3 @@ def test_overselling_raises_with_ticker_date_and_shortfall_in_message() -> None:
                 txn("2024-02-01", "SELL", quantity=15, price_per_share=100, fx_rate_to_chf=1.0),
             ]
         )
-
-
-def test_validate_ticker_passes_for_a_consistent_result() -> None:
-    transactions = [
-        txn("2024-01-01", "BUY", quantity=10, price_per_share=100, fx_rate_to_chf=1.0),
-        txn("2024-02-01", "SELL", quantity=4, price_per_share=120, fx_rate_to_chf=1.0),
-    ]
-    result = process_ticker(transactions)
-
-    validation = validate_ticker("AAPL", transactions, result)
-    assert validation["valid"] is True
-    assert validation["errors"] == []

@@ -57,6 +57,22 @@ class TestPortfolioRollupRoute:
         assert response.status_code == 500
         assert "No TickerMetadata for ORPHAN" in response.json()["error"]
 
+    def test_unexpected_exception_returns_generic_message_not_the_raw_text(
+        self, authed_client: TestClient, monkeypatch
+    ) -> None:
+        # Anything other than the expected RuntimeError (missing
+        # TickerMetadata) must never leak its raw message to the client -
+        # e.g. a DB driver error can embed the connection string.
+        def raise_sensitive(db, user_id, force_refresh=False):
+            raise ValueError("connection to server at postgresql://user:supersecret@host failed")
+
+        monkeypatch.setattr("app.routers.portfolio_rollup.compute_portfolio_rollup", raise_sensitive)
+
+        response = authed_client.get("/portfolio-rollup")
+        assert response.status_code == 500
+        assert response.json() == {"error": "Internal server error"}
+        assert "supersecret" not in response.text
+
     def test_excludes_ticker_from_totals_on_price_fetch_failure_but_keeps_others(
         self, authed_client: TestClient, db_session: Session, test_user: User, monkeypatch
     ) -> None:

@@ -146,26 +146,3 @@ def process_ticker(transactions: list[ProcessedTransaction]) -> FIFOResult:
         total_realized_gain_native=total_realized_gain_native,
         total_realized_gain_chf=total_realized_gain_chf,
     )
-
-
-def validate_ticker(ticker: str, transactions: list[ProcessedTransaction], result: FIFOResult) -> dict:
-    total_buys = sum(t.quantity for t in transactions if t.type in ("BUY", "DRIP"))
-    total_sells = sum(t.quantity for t in transactions if t.type == "SELL")
-    expected_shares = total_buys - total_sells
-
-    errors: list[str] = []
-    if abs(result.current_shares - expected_shares) > 1e-6:
-        errors.append(
-            f"current_shares mismatch: got {result.current_shares:.4f}, expected {expected_shares:.4f} "
-            f"(buys+drip: {total_buys}, sells: {total_sells})"
-        )
-    if result.current_shares < -1e-6:
-        errors.append(f"current_shares is negative: {result.current_shares}")
-
-    expected_cost_basis = sum(lot.qty * lot.cost_per_share for lot in result.remaining_lots if not lot.is_from_drip)
-    if abs(result.current_cost_basis_native - expected_cost_basis) > 1e-6:
-        errors.append(
-            f"current_cost_basis mismatch: got {result.current_cost_basis_native}, expected {expected_cost_basis}"
-        )
-
-    return {"valid": len(errors) == 0, "errors": errors}
