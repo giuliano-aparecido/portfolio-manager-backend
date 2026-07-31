@@ -7,6 +7,7 @@ from app.exceptions import AppError, NotFoundError
 from app.models import PortfolioTransaction, TickerMetadata
 from app.schemas.portfolio import TransactionCreateRequest, TransactionOut, TransactionUpdateRequest
 from app.services.fifo import ProcessedTransaction
+from app.services.locking import lock_portfolio_ticker
 from app.services.mappers import portfolio_transaction_to_processed
 from app.services.mutation_validation import validate_fifo_integrity
 from app.services.price_service import fetch_historical_fx_rate
@@ -60,6 +61,13 @@ def create_transaction(
         raise AppError(
             502, f"Could not fetch historical FX rate for {metadata.native_currency} on {date_str}: {exc}"
         ) from exc
+
+    # Acquired before the "existing rows" read below (not just before the
+    # write) so a second concurrent request actually blocks here until the
+    # first commits, then sees the first's committed transaction as part
+    # of its own validation — otherwise two concurrent SELLs could each
+    # validate fine against the same stale snapshot and jointly oversell.
+    lock_portfolio_ticker(db, user_id, ticker)
 
     existing = db.query(PortfolioTransaction).filter(
         PortfolioTransaction.ticker == ticker, PortfolioTransaction.user_id == user_id
@@ -155,6 +163,8 @@ def update_transaction(
             502, f"Could not fetch historical FX rate for {metadata.native_currency} on {date_str}: {exc}"
         ) from exc
 
+    lock_portfolio_ticker(db, user_id, ticker)
+
     others = db.query(PortfolioTransaction).filter(
         PortfolioTransaction.ticker == ticker, PortfolioTransaction.user_id == user_id, PortfolioTransaction.id != existing_txn.id
     ).all()
@@ -191,6 +201,8 @@ def delete_transaction(
     user_id: str = Depends(get_authenticated_user_id),
 ) -> dict:
     existing_txn = _get_owned_transaction(db, transaction_id, user_id)
+
+    lock_portfolio_ticker(db, user_id, existing_txn.ticker)
 
     remaining = db.query(PortfolioTransaction).filter(
         PortfolioTransaction.ticker == existing_txn.ticker,

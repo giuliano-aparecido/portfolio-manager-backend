@@ -147,6 +147,11 @@ class PassiveInvestmentRollupRow(CamelModel):
 class PassiveFxError(CamelModel):
     currency: str
     error: str
+    # Names of the investments excluded from the rollup because of this
+    # currency's FX failure — without this, a dropped investment is
+    # invisible: the currency-level error gives no way to tell which rows
+    # (if any) are missing from the totals below.
+    affected_investments: list[str]
 
 
 class PassiveRollup(CamelModel):
