@@ -1,6 +1,5 @@
-"""Ported from lib/portfolio/rollup.ts. FX/price fetches are genuinely
-parallelized with a thread pool (yfinance calls are blocking I/O),
-matching the original's Promise.all concurrency.
+"""FX/price fetches are genuinely parallelized with a thread pool, since
+yfinance calls are blocking I/O.
 """
 
 from collections import defaultdict

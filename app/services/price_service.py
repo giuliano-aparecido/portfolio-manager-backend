@@ -1,8 +1,7 @@
-"""Live price/FX fetching via yfinance — ported from lib/portfolio/price-service.ts
-(originally yahoo-finance2). The unofficial Yahoo Finance data source is the
-same across both ecosystems; only the client library differs.
+"""Live price/FX fetching via yfinance — an unofficial Yahoo Finance data
+source, no API key needed.
 
-Two porting risks worth knowing about:
+Two risks worth knowing about:
 - `Ticker.fast_info` key names have shifted across yfinance releases before
   and may again — if fetches start failing, check `Ticker(...).fast_info.keys()`
   against what's used here.
