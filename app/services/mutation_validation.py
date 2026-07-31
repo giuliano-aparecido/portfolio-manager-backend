@@ -1,7 +1,6 @@
-"""Ported from lib/portfolio/mutation-validation.ts. Called by every
-portfolio-transaction mutation route (create/update/delete) with the full
-hypothetical post-mutation transaction set for that ticker, to reject
-invariant-breaking edits up front.
+"""Called by every portfolio-transaction mutation route (create/update/
+delete) with the full hypothetical post-mutation transaction set for that
+ticker, to reject invariant-breaking edits up front.
 """
 
 from app.services.fifo import ProcessedTransaction, process_ticker
