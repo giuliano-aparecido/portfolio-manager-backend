@@ -1,12 +1,7 @@
 """Reference LLMProvider implementation, using the Claude Messages API's
-native tool-use + streaming support.
-
-`messages` is passed straight through in Anthropic's own wire shape (a
-`tool_result` content block for tool responses, etc.) rather than translated
-through a provider-neutral message format — a second provider would need to
-translate its own shape at its call site in the agent loop. Building a full
-provider-neutral message IR isn't justified when only one provider ships;
-see base.py's docstring.
+native tool-use + streaming support. Translates the neutral Turn history
+(see base.py) into Anthropic's own wire shape (tool_use/tool_result content
+blocks) at call time.
 """
 
 from collections.abc import AsyncIterator
@@ -15,9 +10,40 @@ from typing import Any
 import anthropic
 
 from app.config import get_settings
-from app.services.llm.base import AgentEvent, LLMProvider, ToolCallRequest
+from app.services.llm.base import AgentEvent, AssistantTurn, LLMProvider, ToolCallRequest, ToolResultsTurn, Turn, UserTurn
 
 MAX_TOKENS = 4096
+
+
+def _to_claude_messages(history: list[Turn]) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    for turn in history:
+        if isinstance(turn, UserTurn):
+            messages.append({"role": "user", "content": turn.text})
+        elif isinstance(turn, AssistantTurn):
+            content: list[dict[str, Any]] = []
+            if turn.text:
+                content.append({"type": "text", "text": turn.text})
+            content.extend(
+                {"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.input} for tc in turn.tool_calls
+            )
+            messages.append({"role": "assistant", "content": content})
+        elif isinstance(turn, ToolResultsTurn):
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": r.tool_call_id,
+                            "content": r.content,
+                            "is_error": r.is_error,
+                        }
+                        for r in turn.results
+                    ],
+                }
+            )
+    return messages
 
 
 class ClaudeProvider(LLMProvider):
@@ -28,7 +54,7 @@ class ClaudeProvider(LLMProvider):
 
     async def stream_turn(
         self,
-        messages: list[dict[str, Any]],
+        history: list[Turn],
         tools: list[dict[str, Any]],
         system: str,
     ) -> AsyncIterator[AgentEvent]:
@@ -39,7 +65,7 @@ class ClaudeProvider(LLMProvider):
             model=self._model,
             max_tokens=MAX_TOKENS,
             system=system,
-            messages=messages,
+            messages=_to_claude_messages(history),
             tools=claude_tools,
         ) as stream:
             async for event in stream:

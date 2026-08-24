@@ -49,8 +49,9 @@ kicks in when `ENVIRONMENT=production`.
 | `DATABASE_URL` | Postgres connection string | local Docker Postgres on port 5433 |
 | `NEXTAUTH_SECRET` | Shared HMAC key with the frontend's session tokens — **must match exactly** in any environment where real auth matters | insecure dev placeholder |
 | `FRONTEND_ORIGIN` | Allowed CORS origin | `http://localhost:3000` |
-| `ANTHROPIC_API_KEY` | Claude API key for the `/agent/ask` portfolio assistant | empty — agent calls fail without it |
-| `AGENT_MODEL` | Claude model the agent loop uses | `claude-sonnet-5` |
+| `AGENT_PROVIDER` | `gemini` \| `claude` — which LLM backs `/agent/ask` | `gemini` |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | Gemini API key + model, used when `AGENT_PROVIDER=gemini` | empty / `gemini-2.5-flash` |
+| `ANTHROPIC_API_KEY` / `AGENT_MODEL` | Claude API key + model, used when `AGENT_PROVIDER=claude` | empty / `claude-sonnet-5` |
 | `MCP_ISSUER_URL` / `MCP_RESOURCE_SERVER_URL` | Metadata URLs for the mounted MCP server's protected-resource discovery — point these at this backend's own base URL, not a real OAuth issuer | `http://localhost:8000` / `http://localhost:8000/mcp` |
 
 Local Postgres runs on port **5433**, not 5432 — this is deliberate, to

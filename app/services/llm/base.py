@@ -1,13 +1,22 @@
-"""Provider-agnostic seam for the agent loop (app/routers/agent.py). Plain
-JSON-Schema tool defs and role-based message dicts — the same shape every
-major provider's tool-calling API uses — so a second provider could be
-added later without touching the loop. Only ClaudeProvider ships in v1 (see
-claude_provider.py); no unused stub implementations for other providers.
+"""Provider-agnostic seam for the agent loop (app/routers/agent.py).
+
+Conversation history is a list of neutral Turn objects, not either
+provider's own wire shape — Claude (content blocks with tool_use/
+tool_result) and Gemini (Content/Part objects with function_call/
+function_response) structure a tool-calling turn differently enough that a
+shared dict shape would just be one provider's shape with the other
+provider translating out of it. Each provider's stream_turn() translates
+this neutral history into its own request shape internally; the router
+only ever builds/appends Turn objects.
+
+Tool defs stay plain JSON Schema (tools: list[dict] with name/description/
+input_schema) since that much genuinely is shared — MCP tool metadata is
+already in that shape (see mcp_server.py's list_tools()).
 """
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
@@ -16,6 +25,33 @@ class ToolCallRequest:
     id: str
     name: str
     input: dict[str, Any]
+
+
+@dataclass
+class ToolResult:
+    tool_call_id: str
+    name: str
+    content: str
+    is_error: bool = False
+
+
+@dataclass
+class UserTurn:
+    text: str
+
+
+@dataclass
+class AssistantTurn:
+    text: str = ""
+    tool_calls: list[ToolCallRequest] = field(default_factory=list)
+
+
+@dataclass
+class ToolResultsTurn:
+    results: list[ToolResult]
+
+
+Turn = UserTurn | AssistantTurn | ToolResultsTurn
 
 
 @dataclass
@@ -30,12 +66,13 @@ class LLMProvider(ABC):
     @abstractmethod
     def stream_turn(
         self,
-        messages: list[dict[str, Any]],
+        history: list[Turn],
         tools: list[dict[str, Any]],
         system: str,
     ) -> AsyncIterator[AgentEvent]:
-        """Run one model turn. The caller is responsible for executing any
-        tool calls the turn ends with and appending their results to
-        `messages` before calling this again for the next turn.
+        """Run one model turn over the given history. The caller executes
+        any tool calls the turn ends with and appends an AssistantTurn (with
+        those tool_calls) followed by a ToolResultsTurn before calling this
+        again for the next turn.
         """
         raise NotImplementedError

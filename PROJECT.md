@@ -198,11 +198,15 @@ calls) and falls back to a contextvar the `/agent/ask` loop sets from its
 own `get_authenticated_user_id` result (real MCP auth never runs for that
 path).
 
-`LLMProvider` (`app/services/llm/base.py`) is a small provider-agnostic
-seam — plain JSON-Schema tool defs and role-based message dicts — so a
-second provider could be added later without changing the agent loop.
-Only `ClaudeProvider` ships; the conversation-message shape passed through
-`stream_turn` is Anthropic's own wire format (`tool_result`/`tool_use`
-content blocks) rather than translated through a provider-neutral IR — a
-second provider would need to translate its own shape at its call site.
-Building a full neutral message format isn't justified for one provider.
+`LLMProvider` (`app/services/llm/base.py`) is a provider-agnostic seam:
+conversation history is a list of neutral `Turn` objects (`UserTurn` /
+`AssistantTurn` / `ToolResultsTurn`), plain JSON-Schema tool defs, and a
+system-prompt string. `GeminiProvider` and `ClaudeProvider` each translate
+that neutral history into their own wire shape at call time — Gemini's
+`Content`/`Part` objects with `function_call`/`function_response` parts,
+Claude's content blocks with `tool_use`/`tool_result` — since the two
+APIs structure a tool-calling turn differently enough that a shared dict
+shape would just be one provider's shape with the other translating out
+of it. `AGENT_PROVIDER` (`gemini` by default, or `claude`) selects which
+one `app/routers/agent.py::get_llm_provider()` returns; switching is
+config, not code.

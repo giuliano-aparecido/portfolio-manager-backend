@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.main import app
 from app.models import PortfolioTransaction, TickerMetadata, User
 from app.routers.agent import get_llm_provider
-from app.services.llm.base import AgentEvent, LLMProvider, ToolCallRequest
+from app.services.llm.base import AgentEvent, AssistantTurn, LLMProvider, ToolCallRequest, ToolResultsTurn, Turn
 from app.services.price_service import PriceQuote
 
 
@@ -20,10 +20,10 @@ class FakeLLMProvider(LLMProvider):
 
     def __init__(self, turns: list[list[AgentEvent]]) -> None:
         self._turns = turns
-        self.calls: list[list[dict]] = []
+        self.calls: list[list[Turn]] = []
 
-    async def stream_turn(self, messages, tools, system) -> AsyncIterator[AgentEvent]:
-        self.calls.append(messages)
+    async def stream_turn(self, history, tools, system) -> AsyncIterator[AgentEvent]:
+        self.calls.append(history)
         turn = self._turns[len(self.calls) - 1]
         for event in turn:
             yield event
@@ -112,11 +112,15 @@ class TestAgentAskHappyPath:
         # The tool call actually hit real seeded data, not a stub.
         assert "AAPL" in body
 
-        # Second turn's messages include the first turn's tool_result.
+        # Second turn's history includes the first turn's assistant tool
+        # call and its result.
         assert len(provider.calls) == 2
-        second_turn_messages = provider.calls[1]
-        assert second_turn_messages[-1]["role"] == "user"
-        assert second_turn_messages[-1]["content"][0]["type"] == "tool_result"
+        second_turn_history = provider.calls[1]
+        assert isinstance(second_turn_history[-2], AssistantTurn)
+        assert second_turn_history[-2].tool_calls[0].name == "get_holdings"
+        assert isinstance(second_turn_history[-1], ToolResultsTurn)
+        assert second_turn_history[-1].results[0].tool_call_id == "tc1"
+        assert "AAPL" in second_turn_history[-1].results[0].content
 
     def test_no_tool_call_returns_text_and_done_in_one_turn(self, authed_client: TestClient) -> None:
         provider = FakeLLMProvider(

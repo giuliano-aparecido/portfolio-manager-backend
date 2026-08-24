@@ -16,13 +16,16 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
+from app.config import get_settings
 from app.dependencies.auth import get_authenticated_user_id
+from app.exceptions import AppError
 from app.mcp_server import mcp_server
 from app.rate_limiter import limiter
 from app.schemas.agent import AskRequest
 from app.services.agent_context import set_current_user_id
-from app.services.llm.base import LLMProvider, ToolCallRequest
+from app.services.llm.base import AssistantTurn, LLMProvider, ToolCallRequest, ToolResult, ToolResultsTurn, Turn, UserTurn
 from app.services.llm.claude_provider import ClaudeProvider
+from app.services.llm.gemini_provider import GeminiProvider
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +46,12 @@ SYSTEM_PROMPT = (
 
 
 def get_llm_provider() -> LLMProvider:
-    return ClaudeProvider()
+    settings = get_settings()
+    if settings.agent_provider == "claude":
+        return ClaudeProvider()
+    if settings.agent_provider == "gemini":
+        return GeminiProvider()
+    raise AppError(500, f"Unknown AGENT_PROVIDER: {settings.agent_provider!r}")
 
 
 def _sse_frame(event: str, data: dict[str, Any]) -> str:
@@ -61,7 +69,7 @@ async def ask(
     async def event_stream() -> AsyncIterator[str]:
         set_current_user_id(user_id)
 
-        messages: list[dict[str, Any]] = [{"role": m.role, "content": m.content} for m in body.messages]
+        history: list[Turn] = [UserTurn(text=m.content) if m.role == "user" else AssistantTurn(text=m.content) for m in body.messages]
         mcp_tools = await mcp_server.list_tools()
         tools = [{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in mcp_tools]
 
@@ -70,7 +78,7 @@ async def ask(
             tool_calls: list[ToolCallRequest] = []
 
             try:
-                async for event in provider.stream_turn(messages, tools, system=SYSTEM_PROMPT):
+                async for event in provider.stream_turn(history, tools, system=SYSTEM_PROMPT):
                     if event.type == "text_delta" and event.text:
                         text_parts.append(event.text)
                         yield _sse_frame("token", {"text": event.text})
@@ -89,29 +97,15 @@ async def ask(
                 yield _sse_frame("done", {})
                 return
 
-            assistant_content: list[dict[str, Any]] = []
-            full_text = "".join(text_parts)
-            if full_text:
-                assistant_content.append({"type": "text", "text": full_text})
-            assistant_content.extend(
-                {"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.input} for tc in tool_calls
-            )
-            messages.append({"role": "assistant", "content": assistant_content})
+            history.append(AssistantTurn(text="".join(text_parts), tool_calls=tool_calls))
 
-            tool_result_blocks: list[dict[str, Any]] = []
+            results: list[ToolResult] = []
             for tc in tool_calls:
                 result = await mcp_server.call_tool(tc.name, tc.input)
                 result_text = "".join(getattr(c, "text", "") for c in result.content)
                 yield _sse_frame("tool_result", {"name": tc.name})
-                tool_result_blocks.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tc.id,
-                        "content": result_text,
-                        "is_error": result.is_error,
-                    }
-                )
-            messages.append({"role": "user", "content": tool_result_blocks})
+                results.append(ToolResult(tool_call_id=tc.id, name=tc.name, content=result_text, is_error=result.is_error))
+            history.append(ToolResultsTurn(results=results))
 
         yield _sse_frame("error", {"message": "The assistant took too many steps to answer — try rephrasing."})
 
