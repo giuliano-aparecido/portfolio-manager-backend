@@ -10,7 +10,6 @@ real OAuth device-flow/token issuance is an explicit out-of-scope
 improvement for this personal, allowlist-gated app.
 """
 
-import uuid
 from collections.abc import Callable
 
 import jwt
@@ -19,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.session import SessionLocal
-from app.dependencies.auth import DEV_USER_EMAIL
+from app.dependencies.auth import get_or_create_dev_user
 from app.models import User
 
 
@@ -38,12 +37,7 @@ class JwtTokenVerifier(TokenVerifier):
             if settings.environment in ("development", "test"):
                 # Matches get_authenticated_user_id's dev bypass: any bearer
                 # value is accepted, always resolving to the fixed dev user.
-                user = db.query(User).filter(User.email == DEV_USER_EMAIL).first()
-                if user is None:
-                    user = User(id=str(uuid.uuid4()), email=DEV_USER_EMAIL, name="Dev User")
-                    db.add(user)
-                    db.commit()
-                    db.refresh(user)
+                user = get_or_create_dev_user(db)
                 return AccessToken(token=token, client_id=user.id, scopes=["read"], subject=user.id)
 
             try:

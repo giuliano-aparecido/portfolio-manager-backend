@@ -91,7 +91,9 @@ def register_tools(mcp: MCPServer) -> None:
         try:
             detail: TickerDetail | None = compute_ticker_detail(db, ticker, user_id)
             if detail is None:
-                return TickerNotFound().model_dump(mode="json", by_alias=True)
+                return TickerNotFound(
+                    message=f"{ticker} isn't tracked in your portfolio."
+                ).model_dump(mode="json", by_alias=True)
             return detail.model_dump(mode="json", by_alias=True)
         finally:
             db.close()

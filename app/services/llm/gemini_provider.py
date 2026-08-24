@@ -86,6 +86,7 @@ class GeminiProvider(LLMProvider):
         config = types.GenerateContentConfig(system_instruction=system, tools=gemini_tools)
 
         call_count = 0
+        hit_max_tokens = False
         stream = await self._client.aio.models.generate_content_stream(
             model=self._model,
             contents=_to_gemini_contents(history),
@@ -93,7 +94,11 @@ class GeminiProvider(LLMProvider):
         )
         async for chunk in stream:
             candidates = chunk.candidates or []
-            if not candidates or candidates[0].content is None or candidates[0].content.parts is None:
+            if not candidates:
+                continue
+            if candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
+                hit_max_tokens = True
+            if candidates[0].content is None or candidates[0].content.parts is None:
                 continue
             for part in candidates[0].content.parts:
                 if part.text:
@@ -109,5 +114,13 @@ class GeminiProvider(LLMProvider):
                         type="tool_call_start",
                         tool_call=ToolCallRequest(id=call_id, name=fc.name or "", input=dict(fc.args or {})),
                     )
+
+        if hit_max_tokens:
+            # Silent truncation is worse than an explicit error — the
+            # partial answer already streamed stays on screen, but the
+            # caller needs to know it's incomplete rather than treating
+            # this like a clean turn end.
+            yield AgentEvent(type="error", error_message="The response was cut off for being too long.")
+            return
 
         yield AgentEvent(type="turn_end")

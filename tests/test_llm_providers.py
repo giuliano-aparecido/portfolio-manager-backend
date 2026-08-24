@@ -1,3 +1,7 @@
+from types import SimpleNamespace
+
+from google.genai import types as genai_types
+
 from app.config import Settings
 from app.routers.agent import get_llm_provider
 from app.services.llm.base import AssistantTurn, ToolCallRequest, ToolResult, ToolResultsTurn, UserTurn
@@ -77,6 +81,88 @@ class TestToGeminiContents:
         )
         function_response = contents[0].parts[0].function_response
         assert function_response.response == {"error": "not tracked"}
+
+
+class FakeAnthropicStream:
+    """Mimics the async-context-manager + async-iterable shape
+    client.messages.stream(...) returns, so ClaudeProvider's truncation
+    handling can be tested without a real API call.
+    """
+
+    def __init__(self, final_message) -> None:
+        self._final_message = final_message
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info) -> bool:
+        return False
+
+    def __aiter__(self):
+        async def _empty():
+            return
+            yield
+
+        return _empty()
+
+    async def get_final_message(self):
+        return self._final_message
+
+
+class FakeAnthropicClient:
+    def __init__(self, final_message) -> None:
+        self.messages = SimpleNamespace(stream=lambda **kwargs: FakeAnthropicStream(final_message))
+
+
+class TestClaudeProviderTruncation:
+    async def test_max_tokens_stop_reason_yields_an_error_not_a_clean_turn_end(self) -> None:
+        final_message = SimpleNamespace(stop_reason="max_tokens", content=[])
+        provider = ClaudeProvider(client=FakeAnthropicClient(final_message), model="claude-test")
+
+        events = [event async for event in provider.stream_turn([UserTurn(text="hi")], tools=[], system="")]
+
+        assert len(events) == 1
+        assert events[0].type == "error"
+        assert events[0].error_message == "The response was cut off for being too long."
+
+
+class FakeGeminiStream:
+    """Mimics the async-iterable of chunks generate_content_stream(...)
+    returns, so GeminiProvider's truncation handling can be tested
+    without a real API call.
+    """
+
+    def __init__(self, chunks) -> None:
+        self._chunks = chunks
+
+    def __aiter__(self):
+        async def _gen():
+            for chunk in self._chunks:
+                yield chunk
+
+        return _gen()
+
+
+class FakeGeminiClient:
+    def __init__(self, chunks) -> None:
+        async def generate_content_stream(**kwargs):
+            return FakeGeminiStream(chunks)
+
+        self.aio = SimpleNamespace(models=SimpleNamespace(generate_content_stream=generate_content_stream))
+
+
+class TestGeminiProviderTruncation:
+    async def test_max_tokens_finish_reason_yields_an_error_not_a_clean_turn_end(self) -> None:
+        final_chunk = SimpleNamespace(
+            candidates=[SimpleNamespace(finish_reason=genai_types.FinishReason.MAX_TOKENS, content=None)]
+        )
+        provider = GeminiProvider(client=FakeGeminiClient([final_chunk]), model="gemini-test")
+
+        events = [event async for event in provider.stream_turn([UserTurn(text="hi")], tools=[], system="")]
+
+        assert len(events) == 1
+        assert events[0].type == "error"
+        assert events[0].error_message == "The response was cut off for being too long."
 
 
 class TestGetLlmProvider:

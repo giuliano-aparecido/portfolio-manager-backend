@@ -136,6 +136,49 @@ class TestAgentAskHappyPath:
         assert len(provider.calls) == 1
 
 
+class TestAgentAskToolCallFailure:
+    def test_a_raising_tool_yields_a_graceful_error_frame_not_a_truncated_stream(
+        self, authed_client: TestClient, db_session: Session, test_user: User, agent_session_factory, monkeypatch
+    ) -> None:
+        # compute_whatif's live price/FX fetch isn't wrapped in the
+        # per-ticker try/except that get_holdings/get_allocation get from
+        # compute_portfolio_rollup - a raise here must still surface as a
+        # clean SSE error frame, not silently truncate the stream.
+        add_ticker_and_buy(db_session, test_user)
+
+        def raise_price_error(yahoo_ticker: str, force_refresh: bool = False) -> PriceQuote:
+            raise RuntimeError("No valid price from Yahoo Finance for AAPL")
+
+        monkeypatch.setattr("app.services.agent_tools.fetch_current_price", raise_price_error)
+
+        provider = FakeLLMProvider(
+            turns=[
+                [
+                    AgentEvent(
+                        type="tool_call_start",
+                        tool_call=ToolCallRequest(
+                            id="tc1",
+                            name="compute_whatif",
+                            input={"ticker": "AAPL", "action": "SELL", "quantity": 1},
+                        ),
+                    ),
+                    AgentEvent(type="turn_end"),
+                ]
+            ]
+        )
+        override_llm_provider(provider)
+
+        response = authed_client.post("/agent/ask", json={"messages": [{"role": "user", "content": "sell 1 AAPL?"}]})
+
+        assert response.status_code == 200
+        body = response.text
+        assert "event: tool_call" in body
+        assert "event: error" in body
+        assert "unexpected error running a tool" in body
+        assert "event: done" not in body
+        assert "event: tool_result" not in body
+
+
 class TestAgentAskRateLimiting:
     def test_returns_429_after_exceeding_the_six_per_minute_limit(self, authed_client: TestClient) -> None:
         provider = FakeLLMProvider(turns=[[AgentEvent(type="text_delta", text="hi"), AgentEvent(type="turn_end")]] * 10)

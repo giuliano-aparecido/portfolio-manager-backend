@@ -100,11 +100,21 @@ async def ask(
             history.append(AssistantTurn(text="".join(text_parts), tool_calls=tool_calls))
 
             results: list[ToolResult] = []
-            for tc in tool_calls:
-                result = await mcp_server.call_tool(tc.name, tc.input)
-                result_text = "".join(getattr(c, "text", "") for c in result.content)
-                yield _sse_frame("tool_result", {"name": tc.name})
-                results.append(ToolResult(tool_call_id=tc.id, name=tc.name, content=result_text, is_error=result.is_error))
+            try:
+                for tc in tool_calls:
+                    result = await mcp_server.call_tool(tc.name, tc.input)
+                    result_text = "".join(getattr(c, "text", "") for c in result.content)
+                    yield _sse_frame("tool_result", {"name": tc.name})
+                    results.append(
+                        ToolResult(tool_call_id=tc.id, name=tc.name, content=result_text, is_error=result.is_error)
+                    )
+            except Exception:  # noqa: BLE001 — a tool can raise directly (e.g. compute_whatif's
+                # live price/FX fetch), unlike the transport-layer MCP path, which converts tool
+                # exceptions into an is_error CallToolResult before they ever reach a caller. This
+                # in-process dispatch bypasses that conversion, so it needs its own catch here.
+                logger.exception("Unexpected error during tool dispatch")
+                yield _sse_frame("error", {"message": "The assistant hit an unexpected error running a tool."})
+                return
             history.append(ToolResultsTurn(results=results))
 
         yield _sse_frame("error", {"message": "The assistant took too many steps to answer — try rephrasing."})

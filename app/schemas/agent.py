@@ -61,3 +61,4 @@ class AskRequest(CamelModel):
 
 class TickerNotFound(CamelModel):
     found: bool = False
+    message: str

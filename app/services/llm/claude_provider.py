@@ -12,7 +12,7 @@ import anthropic
 from app.config import get_settings
 from app.services.llm.base import AgentEvent, AssistantTurn, LLMProvider, ToolCallRequest, ToolResultsTurn, Turn, UserTurn
 
-MAX_TOKENS = 4096
+MAX_TOKENS = 8192
 
 
 def _to_claude_messages(history: list[Turn]) -> list[dict[str, Any]]:
@@ -72,6 +72,14 @@ class ClaudeProvider(LLMProvider):
                 if event.type == "content_block_delta" and event.delta.type == "text_delta":
                     yield AgentEvent(type="text_delta", text=event.delta.text)
             final_message = await stream.get_final_message()
+
+        if final_message.stop_reason == "max_tokens":
+            # Silent truncation is worse than an explicit error — the
+            # partial answer already streamed stays on screen, but the
+            # caller needs to know it's incomplete rather than treating
+            # this like a clean turn end.
+            yield AgentEvent(type="error", error_message="The response was cut off for being too long.")
+            return
 
         for block in final_message.content:
             if block.type == "tool_use":
