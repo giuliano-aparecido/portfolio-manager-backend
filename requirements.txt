@@ -9,3 +9,5 @@ pyjwt>=2.9
 yfinance>=0.2.43
 pandas>=2.2
 slowapi>=0.1.9
+anthropic>=1.0.0
+mcp>=2.1.0

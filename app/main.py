@@ -1,14 +1,18 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-from slowapi.util import get_remote_address
 
 from app.config import get_settings
 from app.exceptions import AppError, app_error_handler, validation_error_handler
+from app.mcp_server import mcp_server
+from app.rate_limiter import limiter
 from app.routers import (
+    agent,
     auth,
     passive_investments,
     passive_recurring_deposit,
@@ -19,21 +23,20 @@ from app.routers import (
     portfolio_transactions,
 )
 
-# Applies to every route via default_limits, no per-route decorators needed.
-# Keyed by client IP - see the Dockerfile's --proxy-headers flag, without
-# which every request behind Render's proxy would share one IP and thus one
-# bucket. 60/minute comfortably covers real usage (a handful of page loads
-# and refreshes per session) while still capping abusive/bot traffic - the
-# real risk on a personal, allowlist-gated app is a leaked token spamming
-# the yfinance-backed endpoints (Yahoo can rate-limit or block the whole
-# outbound IP for that) or bots probing public URLs and burning Render's
-# free-tier compute, not deliberate multi-user abuse.
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+__all__ = ["app", "create_app", "limiter"]
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Required for the mounted MCP app (see app.mount("/mcp", ...) below) —
+    # without an active session_manager, mounted requests fail.
+    async with mcp_server.session_manager.run():
+        yield
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="Portfolio Manager API")
+    app = FastAPI(title="Portfolio Manager API", lifespan=lifespan)
 
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -63,6 +66,13 @@ def create_app() -> FastAPI:
     app.include_router(passive_transactions.router)
     app.include_router(passive_recurring_deposit.router)
     app.include_router(passive_rollup.router)
+    app.include_router(agent.router)
+
+    # Starlette sub-app semantics: requests under /mcp bypass the outer
+    # app's CORS/SlowAPI middleware above (they run their own auth via
+    # JwtTokenVerifier instead — see app/mcp_server.py). Fine here since MCP
+    # clients aren't browser-hosted, not an oversight.
+    app.mount("/mcp", mcp_server.streamable_http_app(streamable_http_path="/"))
 
     # methods=["GET", "HEAD"] - @app.get() alone 405s on HEAD, which is
     # what uptime monitors (e.g. UptimeRobot's default HTTP(s) check) send

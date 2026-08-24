@@ -148,3 +148,61 @@ Render's free-tier compute. `SlowAPIMiddleware` is registered *before*
 builds its middleware stack so whichever is added last wraps outermost —
 otherwise a 429 response would be missing CORS headers and a browser would
 report it as an opaque network error rather than a readable 429.
+`POST /agent/ask` overrides this to a tighter 6/minute (see below) —
+LLM calls are slow and cost money, so a leaked token should be capped
+harder there than on the rest of the API.
+
+## Portfolio assistant agent + MCP server
+
+`POST /agent/ask` is a chat endpoint: an LLM (Claude, via
+`app/services/llm/claude_provider.py`) reasons over the user's question and
+decides which read-only tools to call — it never computes a financial
+figure itself, only the app's existing deterministic services do
+(FIFO, live pricing, rollups). The response streams back as
+Server-Sent Events (`token`/`tool_call`/`tool_result`/`done`/`error`
+frames); the frontend resends the whole conversation each turn, so nothing
+is persisted server-side.
+
+The tool implementations live once, in `app/services/agent_tools.py`, and
+are registered onto a single `MCPServer` instance
+(`app/mcp_server.py`) — a real [MCP](https://modelcontextprotocol.io)
+server, mounted at `/mcp` (`app.mount(...)` in `main.py`, Starlette
+sub-app semantics — `/mcp` requests bypass the outer app's CORS/SlowAPI
+middleware, since MCP clients aren't browser-hosted and the mount has its
+own auth gate). Two things dispatch tool calls against that one registry:
+
+- **External MCP clients** (Claude Desktop, etc.) connect directly over
+  Streamable HTTP and authenticate via a bearer JWT, verified by
+  `app/dependencies/mcp_auth.py::JwtTokenVerifier` — the same
+  HS256/`NEXTAUTH_SECRET` + users-table-allowlist check as
+  `get_authenticated_user_id`, adapted to the `mcp` SDK's `TokenVerifier`
+  protocol. There's no self-service token issuance: a long-lived JWT is
+  manually minted and pasted into the external client's config. Building
+  real OAuth device-flow/token issuance is a deliberate future
+  improvement, not an oversight, for an app with an allowlist of one or
+  two real users.
+- **`/agent/ask`'s own loop** dispatches in-process, via
+  `mcp_server.list_tools()` / `mcp_server.call_tool(...)` (plain method
+  calls, not an HTTP request to its own `/mcp` mount) — this avoids a
+  same-process double round-trip and a self-auth problem the loopback
+  would otherwise need (minting the process a bearer token for its own
+  MCP server). The externally-connectable MCP server is what demonstrates
+  the protocol; the internal loop doesn't need to also speak MCP to
+  itself to get the same tool-registry benefit.
+
+Since MCP tool functions don't go through FastAPI's dependency system,
+each one opens its own short-lived DB session and resolves the caller's
+identity via `app/services/agent_context.py::resolve_user_id()` — which
+checks the MCP SDK's own `get_access_token()` (set for real MCP-client
+calls) and falls back to a contextvar the `/agent/ask` loop sets from its
+own `get_authenticated_user_id` result (real MCP auth never runs for that
+path).
+
+`LLMProvider` (`app/services/llm/base.py`) is a small provider-agnostic
+seam — plain JSON-Schema tool defs and role-based message dicts — so a
+second provider could be added later without changing the agent loop.
+Only `ClaudeProvider` ships; the conversation-message shape passed through
+`stream_turn` is Anthropic's own wire format (`tool_result`/`tool_use`
+content blocks) rather than translated through a provider-neutral IR — a
+second provider would need to translate its own shape at its call site.
+Building a full neutral message format isn't justified for one provider.

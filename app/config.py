@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     # Vercel frontend origin, for CORS. Not enforced in development.
     frontend_origin: str = "http://localhost:3000"
 
+    # Portfolio-assistant agent (see app/routers/agent.py, app/mcp_server.py).
+    anthropic_api_key: str = ""
+    agent_model: str = "claude-sonnet-5"
+    # Used only to populate the MCP server's protected-resource metadata —
+    # this app doesn't run a real OAuth authorization server (see
+    # app/dependencies/mcp_auth.py's docstring for the deliberately minimal
+    # auth story). Point these at the deployed backend's own base URL.
+    mcp_issuer_url: str = "http://localhost:8000"
+    mcp_resource_server_url: str = "http://localhost:8000/mcp"
+
     @model_validator(mode="after")
     def _require_real_secret_outside_dev(self) -> "Settings":
         if self.environment not in ("development", "test") and (
