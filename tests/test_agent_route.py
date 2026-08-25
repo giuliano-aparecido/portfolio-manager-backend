@@ -29,6 +29,17 @@ class FakeLLMProvider(LLMProvider):
             yield event
 
 
+class RaisingLLMProvider(LLMProvider):
+    """Raises instead of yielding any event — covers the generic
+    `except Exception` path in _stream_llm_turn (a provider crash, as
+    opposed to its own reported AgentEvent(type="error")).
+    """
+
+    async def stream_turn(self, history, tools, system) -> AsyncIterator[AgentEvent]:
+        raise RuntimeError("boom")
+        yield  # pragma: no cover - unreachable; makes this an async generator
+
+
 def add_ticker_and_buy(db_session: Session, user: User, ticker: str = "AAPL") -> None:
     db_session.add(TickerMetadata(user_id=user.id, ticker=ticker, market="NASDAQ", category="Stock", native_currency="USD"))
     db_session.add(
@@ -134,6 +145,48 @@ class TestAgentAskHappyPath:
         assert "event: token" in response.text
         assert "event: done" in response.text
         assert len(provider.calls) == 1
+
+    def test_stops_reading_events_as_soon_as_turn_end_arrives(self, authed_client: TestClient) -> None:
+        # A well-behaved provider never yields after turn_end, but the loop
+        # shouldn't just happen to work by relying on that - it explicitly
+        # breaks on turn_end (app/routers/agent.py), so a stray event after
+        # it must never reach the stream even from a misbehaving provider.
+        provider = FakeLLMProvider(
+            turns=[
+                [
+                    AgentEvent(type="text_delta", text="Hello!"),
+                    AgentEvent(type="turn_end"),
+                    AgentEvent(type="text_delta", text="should never be sent"),
+                ]
+            ]
+        )
+        override_llm_provider(provider)
+
+        response = authed_client.post("/agent/ask", json={"messages": [{"role": "user", "content": "hi"}]})
+
+        assert response.status_code == 200
+        assert "should never be sent" not in response.text
+        assert "event: done" in response.text
+
+    def test_provider_reported_error_yields_exactly_one_error_frame(self, authed_client: TestClient) -> None:
+        provider = FakeLLMProvider(turns=[[AgentEvent(type="error", error_message="boom")]])
+        override_llm_provider(provider)
+
+        response = authed_client.post("/agent/ask", json={"messages": [{"role": "user", "content": "hi"}]})
+
+        assert response.status_code == 200
+        assert response.text.count("event: error") == 1
+        assert "boom" in response.text
+        assert "event: done" not in response.text
+
+    def test_provider_exception_yields_exactly_one_error_frame(self, authed_client: TestClient) -> None:
+        override_llm_provider(RaisingLLMProvider())
+
+        response = authed_client.post("/agent/ask", json={"messages": [{"role": "user", "content": "hi"}]})
+
+        assert response.status_code == 200
+        assert response.text.count("event: error") == 1
+        assert "event: done" not in response.text
 
 
 class TestAgentAskToolCallFailure:

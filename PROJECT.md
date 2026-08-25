@@ -150,7 +150,14 @@ otherwise a 429 response would be missing CORS headers and a browser would
 report it as an opaque network error rather than a readable 429.
 `POST /agent/ask` overrides this to a tighter 6/minute (see below) —
 LLM calls are slow and cost money, so a leaked token should be capped
-harder there than on the rest of the API.
+harder there than on the rest of the API. The mounted `/mcp` endpoint
+(see below) needed a separate fix: `SlowAPIMiddleware` runs for those
+requests too, but slowapi's own route-based limiting looks up the
+matched route's endpoint to pick a limit, and a Starlette `Mount` has no
+`.endpoint` — so it was silently exempt. `McpRateLimitMiddleware`
+(`app/rate_limiter.py`) closes that gap with a direct 20/minute check
+against the same shared limiter/storage, since `/mcp` exposes the same
+yfinance-backed tools as everything else here.
 
 ## Portfolio assistant agent + MCP server
 
@@ -166,10 +173,15 @@ is persisted server-side.
 The tool implementations live once, in `app/services/agent_tools.py`, and
 are registered onto a single `MCPServer` instance
 (`app/mcp_server.py`) — a real [MCP](https://modelcontextprotocol.io)
-server, mounted at `/mcp` (`app.mount(...)` in `main.py`, Starlette
-sub-app semantics — `/mcp` requests bypass the outer app's CORS/SlowAPI
-middleware, since MCP clients aren't browser-hosted and the mount has its
-own auth gate). Two things dispatch tool calls against that one registry:
+server, mounted at `/mcp` (`app.mount(...)` in `main.py`). Starlette
+middleware wraps the whole app including this mount, so CORS still
+applies — what actually doesn't reach `/mcp` is SlowAPI's per-route
+limiting (it looks up a matched route's endpoint for a decorated limit,
+and a Mount has none, so it silently no-ops there); `McpRateLimitMiddleware`
+closes that gap with its own direct check (see "Rate limiting" above).
+Auth is genuinely separate: the mount has its own gate, not
+`get_authenticated_user_id`, since MCP clients aren't browser-hosted.
+Two things dispatch tool calls against that one registry:
 
 - **External MCP clients** (Claude Desktop, etc.) connect directly over
   Streamable HTTP and authenticate via a bearer JWT, verified by

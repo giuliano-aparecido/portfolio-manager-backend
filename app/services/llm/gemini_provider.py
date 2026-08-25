@@ -22,6 +22,11 @@ from google.genai import types
 from app.config import get_settings
 from app.services.llm.base import AgentEvent, AssistantTurn, LLMProvider, ToolCallRequest, ToolResultsTurn, Turn, UserTurn
 
+# Matches claude_provider.py's MAX_TOKENS — set explicitly rather than
+# left to the model's own default so the two providers' effective
+# truncation thresholds don't drift apart from each other unnoticed.
+MAX_OUTPUT_TOKENS = 8192
+
 
 def _tool_result_response(content: str, *, is_error: bool) -> dict[str, Any]:
     # FunctionResponse.response is a dict, not a string — our tool results
@@ -83,7 +88,9 @@ class GeminiProvider(LLMProvider):
                 ]
             )
         ]
-        config = types.GenerateContentConfig(system_instruction=system, tools=gemini_tools)
+        config = types.GenerateContentConfig(
+            system_instruction=system, tools=gemini_tools, max_output_tokens=MAX_OUTPUT_TOKENS
+        )
 
         call_count = 0
         hit_max_tokens = False

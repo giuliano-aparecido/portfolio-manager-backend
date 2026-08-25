@@ -10,7 +10,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.config import get_settings
 from app.exceptions import AppError, app_error_handler, validation_error_handler
 from app.mcp_server import mcp_server
-from app.rate_limiter import limiter
+from app.rate_limiter import McpRateLimitMiddleware, limiter
 from app.routers import (
     agent,
     auth,
@@ -46,6 +46,10 @@ def create_app() -> FastAPI:
     # CORS headers, and the browser would surface it as an opaque network
     # error instead of a readable 429.
     app.add_middleware(SlowAPIMiddleware)
+    # slowapi's own route-based limiting exempts /mcp (a Mount has no
+    # .endpoint for it to look up) — see McpRateLimitMiddleware's own
+    # docstring for the full explanation.
+    app.add_middleware(McpRateLimitMiddleware)
 
     app.add_middleware(
         CORSMiddleware,
@@ -68,10 +72,16 @@ def create_app() -> FastAPI:
     app.include_router(passive_rollup.router)
     app.include_router(agent.router)
 
-    # Starlette sub-app semantics: requests under /mcp bypass the outer
-    # app's CORS/SlowAPI middleware above (they run their own auth via
-    # JwtTokenVerifier instead — see app/mcp_server.py). Fine here since MCP
-    # clients aren't browser-hosted, not an oversight.
+    # Starlette middleware wraps the whole app including mounted sub-apps —
+    # CORSMiddleware genuinely runs for /mcp requests too (verified), it
+    # isn't bypassed. What actually doesn't apply is SlowAPI's per-route
+    # limiting specifically: it looks up the matched route's endpoint to
+    # find a decorated limit, and a Mount has none, so its check silently
+    # no-ops for /mcp (see McpRateLimitMiddleware, which closes that one
+    # gap directly). Auth is genuinely separate here too — /mcp runs its
+    # own JwtTokenVerifier instead of get_authenticated_user_id — see
+    # app/mcp_server.py. Fine since MCP clients aren't browser-hosted
+    # anyway, not an oversight.
     app.mount("/mcp", mcp_server.streamable_http_app(streamable_http_path="/"))
 
     # methods=["GET", "HEAD"] - @app.get() alone 405s on HEAD, which is

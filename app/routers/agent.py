@@ -1,12 +1,4 @@
-"""POST /agent/ask — the portfolio assistant chat endpoint.
-
-Runs a tool-calling loop against an LLMProvider, dispatching tool calls
-in-process through the same mcp_server object that serves external MCP
-clients (mcp_server.list_tools() / .call_tool(...)) rather than opening an
-HTTP loopback to its own /mcp mount — see mcp_server.py and
-agent_context.py for why. The frontend resends the whole conversation each
-turn; nothing is persisted server-side.
-"""
+"""POST /agent/ask — the portfolio assistant chat endpoint, streamed as SSE."""
 
 import json
 import logging
@@ -45,6 +37,12 @@ SYSTEM_PROMPT = (
 )
 
 
+class _StreamStopped(Exception):
+    """Raised by a turn/dispatch helper once it has already yielded its own
+    error frame, so event_stream knows to stop without yielding a second one.
+    """
+
+
 def get_llm_provider() -> LLMProvider:
     settings = get_settings()
     if settings.agent_provider == "claude":
@@ -56,6 +54,62 @@ def get_llm_provider() -> LLMProvider:
 
 def _sse_frame(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+async def _stream_llm_turn(
+    provider: LLMProvider,
+    history: list[Turn],
+    tools: list[dict[str, Any]],
+    tool_calls: list[ToolCallRequest],
+) -> AsyncIterator[str]:
+    """Streams one provider turn as SSE frames, appending any requested tool
+    calls into `tool_calls` (mutated in place) as they arrive, and appending
+    the resulting AssistantTurn to `history` once the turn ends cleanly.
+    """
+    text_parts: list[str] = []
+    try:
+        async for event in provider.stream_turn(history, tools, system=SYSTEM_PROMPT):
+            if event.type == "text_delta" and event.text:
+                text_parts.append(event.text)
+                yield _sse_frame("token", {"text": event.text})
+            elif event.type == "tool_call_start" and event.tool_call:
+                tool_calls.append(event.tool_call)
+                yield _sse_frame("tool_call", {"name": event.tool_call.name, "input": event.tool_call.input})
+            elif event.type == "error":
+                yield _sse_frame("error", {"message": event.error_message or "LLM provider error"})
+                raise _StreamStopped
+            elif event.type == "turn_end":
+                # Explicit stop rather than relying only on the generator
+                # running out, so a provider bug that kept yielding after
+                # turn_end can't silently slip through.
+                break
+    except _StreamStopped:
+        raise
+    except Exception:  # noqa: BLE001 — never leak internal error details to the stream
+        logger.exception("Unexpected error during agent turn")
+        yield _sse_frame("error", {"message": "The assistant hit an unexpected error."})
+        raise _StreamStopped from None
+
+    history.append(AssistantTurn(text="".join(text_parts), tool_calls=tool_calls))
+
+
+async def _dispatch_tool_calls(tool_calls: list[ToolCallRequest], results: list[ToolResult]) -> AsyncIterator[str]:
+    """Runs each requested tool call in-process against mcp_server, streaming
+    a tool_result frame per call and appending to `results` (mutated in
+    place) as they complete.
+    """
+    try:
+        for tc in tool_calls:
+            result = await mcp_server.call_tool(tc.name, tc.input)
+            result_text = "".join(getattr(c, "text", "") for c in result.content)
+            yield _sse_frame("tool_result", {"name": tc.name})
+            results.append(ToolResult(tool_call_id=tc.id, name=tc.name, content=result_text, is_error=result.is_error))
+    except Exception:  # noqa: BLE001 — a tool can raise directly (e.g. compute_whatif's live
+        # price/FX fetch); unlike MCP's transport layer, in-process dispatch never converts
+        # that into an is_error result, so it needs its own catch here.
+        logger.exception("Unexpected error during tool dispatch")
+        yield _sse_frame("error", {"message": "The assistant hit an unexpected error running a tool."})
+        raise _StreamStopped from None
 
 
 @router.post("/ask")
@@ -74,46 +128,22 @@ async def ask(
         tools = [{"name": t.name, "description": t.description, "input_schema": t.input_schema} for t in mcp_tools]
 
         for _ in range(MAX_TOOL_ITERATIONS):
-            text_parts: list[str] = []
             tool_calls: list[ToolCallRequest] = []
-
             try:
-                async for event in provider.stream_turn(history, tools, system=SYSTEM_PROMPT):
-                    if event.type == "text_delta" and event.text:
-                        text_parts.append(event.text)
-                        yield _sse_frame("token", {"text": event.text})
-                    elif event.type == "tool_call_start" and event.tool_call:
-                        tool_calls.append(event.tool_call)
-                        yield _sse_frame("tool_call", {"name": event.tool_call.name, "input": event.tool_call.input})
-                    elif event.type == "error":
-                        yield _sse_frame("error", {"message": event.error_message or "LLM provider error"})
-                        return
-            except Exception:  # noqa: BLE001 — never leak internal error details to the stream
-                logger.exception("Unexpected error during agent turn")
-                yield _sse_frame("error", {"message": "The assistant hit an unexpected error."})
+                async for frame in _stream_llm_turn(provider, history, tools, tool_calls):
+                    yield frame
+            except _StreamStopped:
                 return
 
             if not tool_calls:
                 yield _sse_frame("done", {})
                 return
 
-            history.append(AssistantTurn(text="".join(text_parts), tool_calls=tool_calls))
-
             results: list[ToolResult] = []
             try:
-                for tc in tool_calls:
-                    result = await mcp_server.call_tool(tc.name, tc.input)
-                    result_text = "".join(getattr(c, "text", "") for c in result.content)
-                    yield _sse_frame("tool_result", {"name": tc.name})
-                    results.append(
-                        ToolResult(tool_call_id=tc.id, name=tc.name, content=result_text, is_error=result.is_error)
-                    )
-            except Exception:  # noqa: BLE001 — a tool can raise directly (e.g. compute_whatif's
-                # live price/FX fetch), unlike the transport-layer MCP path, which converts tool
-                # exceptions into an is_error CallToolResult before they ever reach a caller. This
-                # in-process dispatch bypasses that conversion, so it needs its own catch here.
-                logger.exception("Unexpected error during tool dispatch")
-                yield _sse_frame("error", {"message": "The assistant hit an unexpected error running a tool."})
+                async for frame in _dispatch_tool_calls(tool_calls, results):
+                    yield frame
+            except _StreamStopped:
                 return
             history.append(ToolResultsTurn(results=results))
 
