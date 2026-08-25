@@ -23,7 +23,12 @@ class FakeLLMProvider(LLMProvider):
         self.calls: list[list[Turn]] = []
 
     async def stream_turn(self, history, tools, system) -> AsyncIterator[AgentEvent]:
-        self.calls.append(history)
+        # Snapshot, not a reference — event_stream() keeps appending to
+        # `history` after this call returns (the AssistantTurn from this
+        # very turn, then a ToolResultsTurn), so storing the list itself
+        # would make every entry in self.calls silently reflect the final
+        # post-loop state instead of what history looked like at call time.
+        self.calls.append(list(history))
         turn = self._turns[len(self.calls) - 1]
         for event in turn:
             yield event

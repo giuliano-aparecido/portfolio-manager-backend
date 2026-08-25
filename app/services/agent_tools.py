@@ -17,6 +17,7 @@ returned here comes from the same deterministic services the rest of the
 app uses (FIFO, live pricing, rollups).
 """
 
+import math
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -145,6 +146,21 @@ def register_tools(mcp: MCPServer) -> None:
         used. Call this for "what if I bought/sold X shares of Y" questions
         — never estimate this math yourself, always call this tool.
         """
+        # quantity/price_per_share come from the LLM's tool-call arguments,
+        # an external trust boundary like any other user input. An unchecked
+        # non-positive, NaN, or infinite value doesn't error, it flows
+        # straight into process_ticker and produces a confident-looking but
+        # nonsense WhatIfImpact instead (an infinite value survives as far
+        # as json.dumps, which emits the non-standard `Infinity` token a
+        # strict JSON parser like the frontend's then chokes on). `not (x > 0)`
+        # rather than `x <= 0` so NaN (which the MCP SDK's schema validation
+        # doesn't reject) is also caught — every comparison against NaN is
+        # False, so `x <= 0` lets it slip through where `not (x > 0)` doesn't.
+        if not (quantity > 0) or not math.isfinite(quantity):
+            return {"error": "quantity must be a positive number of shares."}
+        if price_per_share is not None and (not (price_per_share > 0) or not math.isfinite(price_per_share)):
+            return {"error": "price_per_share must be a positive number."}
+
         with _tool_context() as (user_id, db):
             metadata = (
                 db.query(TickerMetadata)

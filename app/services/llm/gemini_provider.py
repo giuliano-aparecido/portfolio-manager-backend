@@ -13,7 +13,8 @@ emitted once each, in the chunk they first appear.
 """
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from itertools import count
 from typing import Any
 
 from google import genai
@@ -66,6 +67,57 @@ def _to_gemini_contents(history: list[Turn]) -> list[types.Content]:
     return contents
 
 
+def _build_gemini_tools(tools: list[dict[str, Any]]) -> list[types.Tool]:
+    return [
+        types.Tool(
+            function_declarations=[
+                types.FunctionDeclaration(
+                    name=t["name"], description=t["description"], parameters_json_schema=t["input_schema"]
+                )
+                for t in tools
+            ]
+        )
+    ]
+
+
+def _events_from_chunk(chunk: types.GenerateContentResponse, call_ids: Iterator[int]) -> tuple[list[AgentEvent], bool]:
+    """Translates one streamed chunk into AgentEvents. Returns
+    (events, hit_max_tokens) rather than yielding directly — this is a
+    plain function, not a generator, so there's no restriction on
+    returning a value alongside the results the way there would be for an
+    async generator (see agent.py's _StreamStopped for that case).
+
+    Not a pure function: `call_ids` is shared/advanced across the whole
+    stream by the caller (stream_turn), so a fallback id assigned here
+    persists as state into later calls with the same iterator.
+    """
+    candidates = chunk.candidates or []
+    if not candidates:
+        return [], False
+
+    hit_max_tokens = candidates[0].finish_reason == types.FinishReason.MAX_TOKENS
+    if candidates[0].content is None or candidates[0].content.parts is None:
+        return [], hit_max_tokens
+
+    events: list[AgentEvent] = []
+    for part in candidates[0].content.parts:
+        if part.text:
+            events.append(AgentEvent(type="text_delta", text=part.text))
+        elif part.function_call is not None:
+            fc = part.function_call
+            # Gemini function calls aren't always given an id — one is
+            # only needed to label our own tool_call SSE frame, not to
+            # correlate with Gemini itself (unlike Claude).
+            call_id = fc.id or f"call_{next(call_ids)}"
+            events.append(
+                AgentEvent(
+                    type="tool_call_start",
+                    tool_call=ToolCallRequest(id=call_id, name=fc.name or "", input=dict(fc.args or {})),
+                )
+            )
+    return events, hit_max_tokens
+
+
 class GeminiProvider(LLMProvider):
     def __init__(self, client: genai.Client | None = None, model: str | None = None) -> None:
         settings = get_settings()
@@ -78,49 +130,20 @@ class GeminiProvider(LLMProvider):
         tools: list[dict[str, Any]],
         system: str,
     ) -> AsyncIterator[AgentEvent]:
-        gemini_tools = [
-            types.Tool(
-                function_declarations=[
-                    types.FunctionDeclaration(
-                        name=t["name"], description=t["description"], parameters_json_schema=t["input_schema"]
-                    )
-                    for t in tools
-                ]
-            )
-        ]
         config = types.GenerateContentConfig(
-            system_instruction=system, tools=gemini_tools, max_output_tokens=MAX_OUTPUT_TOKENS
+            system_instruction=system, tools=_build_gemini_tools(tools), max_output_tokens=MAX_OUTPUT_TOKENS
+        )
+        stream = await self._client.aio.models.generate_content_stream(
+            model=self._model, contents=_to_gemini_contents(history), config=config
         )
 
-        call_count = 0
+        call_ids = count()
         hit_max_tokens = False
-        stream = await self._client.aio.models.generate_content_stream(
-            model=self._model,
-            contents=_to_gemini_contents(history),
-            config=config,
-        )
         async for chunk in stream:
-            candidates = chunk.candidates or []
-            if not candidates:
-                continue
-            if candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
-                hit_max_tokens = True
-            if candidates[0].content is None or candidates[0].content.parts is None:
-                continue
-            for part in candidates[0].content.parts:
-                if part.text:
-                    yield AgentEvent(type="text_delta", text=part.text)
-                elif part.function_call is not None:
-                    fc = part.function_call
-                    # Gemini function calls aren't always given an id — one
-                    # is only needed to label our own tool_call SSE frame,
-                    # not to correlate with Gemini itself (unlike Claude).
-                    call_id = fc.id or f"call_{call_count}"
-                    call_count += 1
-                    yield AgentEvent(
-                        type="tool_call_start",
-                        tool_call=ToolCallRequest(id=call_id, name=fc.name or "", input=dict(fc.args or {})),
-                    )
+            events, chunk_hit_max_tokens = _events_from_chunk(chunk, call_ids)
+            hit_max_tokens = hit_max_tokens or chunk_hit_max_tokens
+            for event in events:
+                yield event
 
         if hit_max_tokens:
             # Silent truncation is worse than an explicit error — the

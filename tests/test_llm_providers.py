@@ -1,3 +1,4 @@
+from itertools import count
 from types import SimpleNamespace
 
 from google.genai import types as genai_types
@@ -6,7 +7,7 @@ from app.config import Settings
 from app.routers.agent import get_llm_provider
 from app.services.llm.base import AssistantTurn, ToolCallRequest, ToolResult, ToolResultsTurn, UserTurn
 from app.services.llm.claude_provider import ClaudeProvider, _to_claude_messages
-from app.services.llm.gemini_provider import GeminiProvider, _to_gemini_contents
+from app.services.llm.gemini_provider import GeminiProvider, _events_from_chunk, _to_gemini_contents
 
 
 class TestToClaudeMessages:
@@ -124,6 +125,54 @@ class TestClaudeProviderTruncation:
         assert len(events) == 1
         assert events[0].type == "error"
         assert events[0].error_message == "The response was cut off for being too long."
+
+
+def _chunk(parts, finish_reason=None):
+    return SimpleNamespace(candidates=[SimpleNamespace(finish_reason=finish_reason, content=SimpleNamespace(parts=parts))])
+
+
+class TestEventsFromChunk:
+    def test_a_chunk_with_no_candidates_yields_no_events_and_no_truncation(self) -> None:
+        events, hit_max_tokens = _events_from_chunk(SimpleNamespace(candidates=[]), call_ids=count())
+
+        assert events == []
+        assert hit_max_tokens is False
+
+    def test_one_chunk_with_two_parts_produces_two_events_in_order(self) -> None:
+        text_part = SimpleNamespace(text="hi ", function_call=None)
+        call_part = SimpleNamespace(
+            text=None, function_call=SimpleNamespace(id="fc1", name="get_holdings", args={"refresh": True})
+        )
+
+        events, hit_max_tokens = _events_from_chunk(_chunk([text_part, call_part]), call_ids=count())
+
+        assert hit_max_tokens is False
+        assert [e.type for e in events] == ["text_delta", "tool_call_start"]
+        assert events[0].text == "hi "
+        assert events[1].tool_call == ToolCallRequest(id="fc1", name="get_holdings", input={"refresh": True})
+
+    def test_function_calls_with_no_id_fall_back_to_a_shared_counter_across_calls(self) -> None:
+        # call_ids is created once per stream_turn() and threaded through
+        # every chunk — this exercises that the counter keeps advancing
+        # across separate _events_from_chunk calls rather than resetting.
+        call_ids = count()
+        part_a = SimpleNamespace(text=None, function_call=SimpleNamespace(id=None, name="get_holdings", args={}))
+        part_b = SimpleNamespace(text=None, function_call=SimpleNamespace(id=None, name="get_allocation", args={}))
+
+        events_a, _ = _events_from_chunk(_chunk([part_a]), call_ids=call_ids)
+        events_b, _ = _events_from_chunk(_chunk([part_b]), call_ids=call_ids)
+
+        assert events_a[0].tool_call.id == "call_0"
+        assert events_b[0].tool_call.id == "call_1"
+
+    def test_max_tokens_finish_reason_is_reported_even_when_the_chunk_has_no_parts(self) -> None:
+        events, hit_max_tokens = _events_from_chunk(
+            SimpleNamespace(candidates=[SimpleNamespace(finish_reason=genai_types.FinishReason.MAX_TOKENS, content=None)]),
+            call_ids=count(),
+        )
+
+        assert events == []
+        assert hit_max_tokens is True
 
 
 class FakeGeminiStream:
