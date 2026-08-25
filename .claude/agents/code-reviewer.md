@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: Use this agent to review source code changes (a diff, a PR, or a set of files) for quality, maintainability, and correctness issues. It applies SonarQube-style static analysis categories, Clean Code principles, and SOLID design principles. Invoke it after writing or modifying code and before merging, or whenever the user asks for a code review.
+description: Use this agent to review source code changes for quality, maintainability, and correctness issues. Invoke it after writing or modifying code and before merging, or whenever the user asks for a code review.
 tools: Read, Grep, Glob, Bash
 ---
 
