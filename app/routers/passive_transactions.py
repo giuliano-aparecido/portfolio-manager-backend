@@ -74,10 +74,14 @@ def _get_owned_transaction(db: Session, investment_id: int, txn_id_str: str, use
     existing = (
         db.query(PassiveTransaction)
         .join(PassiveInvestment)
-        .filter(PassiveTransaction.id == txn_id)
+        .filter(
+            PassiveTransaction.id == txn_id,
+            PassiveTransaction.passive_investment_id == investment_id,
+            PassiveInvestment.user_id == user_id,
+        )
         .first()
     )
-    if existing is None or existing.passive_investment.user_id != user_id or existing.passive_investment_id != investment_id:
+    if existing is None:
         raise NotFoundError("Transaction not found")
     return existing
 

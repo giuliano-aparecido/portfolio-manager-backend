@@ -15,6 +15,22 @@ from app.utils import to_number
 router = APIRouter(prefix="/passive-investments", tags=["passive-investments"])
 
 
+def _parse_and_validate_investment(body) -> dict:
+    name = (body.name or "").strip()
+    type_ = (body.type or "").strip().upper()
+    currency = (body.currency or "").strip().upper()
+    notes = (body.notes or "").strip() or None
+
+    if not name:
+        raise AppError(400, "name is required")
+    if not is_valid_passive_type(type_):
+        raise AppError(400, f"type must be one of: {', '.join(PASSIVE_TYPES)}")
+    if not is_valid_currency(currency):
+        raise AppError(400, f"currency must be one of: {', '.join(CURRENCIES)}")
+
+    return {"name": name, "type": type_, "currency": currency, "notes": notes}
+
+
 @router.get("", response_model=list[PassiveInvestmentOut])
 def list_passive_investments(
     db: Session = Depends(get_db),
@@ -29,22 +45,12 @@ def create_passive_investment(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_authenticated_user_id),
 ) -> PassiveInvestment:
-    name = (body.name or "").strip()
-    type_ = (body.type or "").strip().upper()
-    currency = (body.currency or "").strip().upper()
-    notes = (body.notes or "").strip() or None
-
-    if not name:
-        raise AppError(400, "name is required")
-    if not is_valid_passive_type(type_):
-        raise AppError(400, f"type must be one of: {', '.join(PASSIVE_TYPES)}")
-    if not is_valid_currency(currency):
-        raise AppError(400, f"currency must be one of: {', '.join(CURRENCIES)}")
+    parsed = _parse_and_validate_investment(body)
 
     # gainLossPct is deliberately never accepted here — a brand-new
     # investment always has zero cost basis, so entering a % at creation
     # time would be inert. It's only editable via PUT, once deposits exist.
-    row = PassiveInvestment(user_id=user_id, name=name, type=type_, currency=currency, notes=notes)
+    row = PassiveInvestment(user_id=user_id, **parsed)
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -84,33 +90,23 @@ def update_passive_investment(
     if existing is None:
         raise NotFoundError("Passive investment not found")
 
-    name = (body.name or "").strip()
-    type_ = (body.type or "").strip().upper()
-    currency = (body.currency or "").strip().upper()
-    notes = (body.notes or "").strip() or None
-
-    if not name:
-        raise AppError(400, "name is required")
-    if not is_valid_passive_type(type_):
-        raise AppError(400, f"type must be one of: {', '.join(PASSIVE_TYPES)}")
-    if not is_valid_currency(currency):
-        raise AppError(400, f"currency must be one of: {', '.join(CURRENCIES)}")
+    parsed = _parse_and_validate_investment(body)
 
     raw_gain_loss_pct = body.gain_loss_pct
     if raw_gain_loss_pct is None or raw_gain_loss_pct == "":
         gain_loss_pct = None
     else:
-        parsed = to_number(raw_gain_loss_pct)
-        if not is_valid_gain_loss_pct(parsed):
+        parsed_gain_loss_pct = to_number(raw_gain_loss_pct)
+        if not is_valid_gain_loss_pct(parsed_gain_loss_pct):
             raise AppError(400, f"gainLossPct must be a number >= {MIN_GAIN_LOSS_PCT}")
-        gain_loss_pct = parsed
+        gain_loss_pct = parsed_gain_loss_pct
 
     gain_loss_changed = gain_loss_pct != existing.gain_loss_pct
 
-    existing.name = name
-    existing.type = type_
-    existing.currency = currency
-    existing.notes = notes
+    existing.name = parsed["name"]
+    existing.type = parsed["type"]
+    existing.currency = parsed["currency"]
+    existing.notes = parsed["notes"]
     existing.gain_loss_pct = gain_loss_pct
     if gain_loss_changed:
         existing.gain_loss_updated_at = datetime.now(timezone.utc)

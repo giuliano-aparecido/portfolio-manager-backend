@@ -17,24 +17,14 @@ from app.utils import parse_date, to_number
 router = APIRouter(prefix="/portfolio/transactions", tags=["portfolio-transactions"])
 
 
-@router.post("", response_model=TransactionOut, status_code=201)
-def create_transaction(
-    body: TransactionCreateRequest,
-    db: Session = Depends(get_db),
-    user_id: str = Depends(get_authenticated_user_id),
-) -> PortfolioTransaction:
-    ticker = (body.ticker or "").strip().upper()
+def _parse_and_validate_transaction(body) -> dict:
     txn_type = (body.type or "").strip().upper()
-    date_str = (body.date or "").strip()
-    notes = (body.notes or "").strip() or None
-
-    if not ticker:
-        raise AppError(400, "ticker is required")
     if not is_valid_transaction_type(txn_type):
         raise AppError(400, f"type must be one of: {', '.join(TRANSACTION_TYPES)}")
-    date = parse_date(date_str)
+    date = parse_date((body.date or "").strip())
     if date is None:
         raise AppError(400, "date is invalid")
+    notes = (body.notes or "").strip() or None
 
     quantity: float | None = None
     price_per_share: float | None = None
@@ -50,6 +40,35 @@ def create_transaction(
         cash_amount = to_number(body.cash_amount)
         if cash_amount is None or cash_amount <= 0:
             raise AppError(400, "cashAmount must be a positive number")
+
+    return {
+        "txn_type": txn_type,
+        "date": date,
+        "notes": notes,
+        "quantity": quantity,
+        "price_per_share": price_per_share,
+        "cash_amount": cash_amount,
+    }
+
+
+@router.post("", response_model=TransactionOut, status_code=201)
+def create_transaction(
+    body: TransactionCreateRequest,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_authenticated_user_id),
+) -> PortfolioTransaction:
+    ticker = (body.ticker or "").strip().upper()
+    if not ticker:
+        raise AppError(400, "ticker is required")
+
+    parsed = _parse_and_validate_transaction(body)
+    txn_type = parsed["txn_type"]
+    date = parsed["date"]
+    notes = parsed["notes"]
+    quantity = parsed["quantity"]
+    price_per_share = parsed["price_per_share"]
+    cash_amount = parsed["cash_amount"]
+    date_str = (body.date or "").strip()
 
     metadata = db.query(TickerMetadata).filter(TickerMetadata.ticker == ticker, TickerMetadata.user_id == user_id).first()
     if metadata is None:
@@ -129,30 +148,14 @@ def update_transaction(
     if metadata is None:
         raise NotFoundError(f"Ticker {ticker} is no longer registered")
 
-    txn_type = (body.type or "").strip().upper()
+    parsed = _parse_and_validate_transaction(body)
+    txn_type = parsed["txn_type"]
+    date = parsed["date"]
+    notes = parsed["notes"]
+    quantity = parsed["quantity"]
+    price_per_share = parsed["price_per_share"]
+    cash_amount = parsed["cash_amount"]
     date_str = (body.date or "").strip()
-    notes = (body.notes or "").strip() or None
-
-    if not is_valid_transaction_type(txn_type):
-        raise AppError(400, f"type must be one of: {', '.join(TRANSACTION_TYPES)}")
-    date = parse_date(date_str)
-    if date is None:
-        raise AppError(400, "date is invalid")
-
-    quantity: float | None = None
-    price_per_share: float | None = None
-    cash_amount: float | None = None
-    if txn_type in ("BUY", "SELL", "DRIP"):
-        quantity = to_number(body.quantity)
-        if quantity is None or quantity <= 0:
-            raise AppError(400, "quantity must be a positive number")
-        price_per_share = to_number(body.price_per_share)
-        if price_per_share is None or price_per_share <= 0:
-            raise AppError(400, "pricePerShare must be a positive number")
-    else:
-        cash_amount = to_number(body.cash_amount)
-        if cash_amount is None or cash_amount <= 0:
-            raise AppError(400, "cashAmount must be a positive number")
 
     # Always re-fetched regardless of whether the date actually changed —
     # simpler than diffing.
