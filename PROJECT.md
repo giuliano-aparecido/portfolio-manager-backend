@@ -148,6 +148,13 @@ Render's free-tier compute. `SlowAPIMiddleware` is registered *before*
 builds its middleware stack so whichever is added last wraps outermost —
 otherwise a 429 response would be missing CORS headers and a browser would
 report it as an opaque network error rather than a readable 429.
+
+Known accepted gap: `--forwarded-allow-ips=*` (Dockerfile) means the
+rate limiter's per-IP key trusts a client-supplied `X-Forwarded-For`
+value, letting a leaked-token holder dodge the 60/minute cap — a
+documented, evaluated tradeoff, not an oversight. Full rationale is in
+the comment above `limiter` in `app/rate_limiter.py`.
+
 `POST /agent/ask` overrides this to a tighter 6/minute (see below) —
 LLM calls are slow and cost money, so a leaked token should be capped
 harder there than on the rest of the API. The mounted `/mcp` endpoint
