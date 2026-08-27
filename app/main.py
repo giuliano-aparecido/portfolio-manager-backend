@@ -80,11 +80,7 @@ def create_app() -> FastAPI:
     app.include_router(passive_recurring_deposit.router)
     app.include_router(passive_rollup.router)
 
-    # methods=["GET", "HEAD"] - @app.get() alone 405s on HEAD, which is
-    # what uptime monitors (e.g. UptimeRobot's default HTTP(s) check) send
-    # by default, causing false "down" alerts against a perfectly healthy
-    # service.
-    @app.api_route("/health", methods=["GET", "HEAD"])
+    @app.get("/health")
     def health() -> dict:
         return {"status": "ok"}
 
