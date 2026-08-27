@@ -13,3 +13,9 @@ Full documentation lives in dedicated files, not duplicated here:
 
 Serves [`portfolio-manager-frontend`](https://github.com/GiulianoAparecido/portfolio-manager-frontend)
 (also documented, same conventions).
+
+Fleet-wide conventions shared with this repo's siblings live in
+[`agent-config/AGENTS.md`](agent-config/AGENTS.md) (a git submodule),
+loaded automatically below for Claude Code.
+
+@agent-config/AGENTS.md

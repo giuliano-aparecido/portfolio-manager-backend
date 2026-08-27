@@ -23,6 +23,22 @@ class Settings(BaseSettings):
     # Vercel frontend origin, for CORS. Not enforced in development.
     frontend_origin: str = "http://localhost:3000"
 
+    # Portfolio-assistant agent (see app/routers/agent.py, app/mcp_server.py).
+    # "gemini" first, per an explicit ask — Claude stays available (set to
+    # "claude") since app/services/llm/base.py's whole point is to make
+    # that a one-line switch, not a code change.
+    agent_provider: str = "gemini"
+    anthropic_api_key: str = ""
+    agent_model: str = "claude-sonnet-5"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    # Used only to populate the MCP server's protected-resource metadata —
+    # this app doesn't run a real OAuth authorization server (see
+    # app/dependencies/mcp_auth.py's docstring for the deliberately minimal
+    # auth story). Point these at the deployed backend's own base URL.
+    mcp_issuer_url: str = "http://localhost:8000"
+    mcp_resource_server_url: str = "http://localhost:8000/mcp"
+
     @model_validator(mode="after")
     def _require_real_secret_outside_dev(self) -> "Settings":
         if self.environment not in ("development", "test") and (

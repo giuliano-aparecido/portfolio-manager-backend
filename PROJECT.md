@@ -153,4 +153,79 @@ Known accepted gap: `--forwarded-allow-ips=*` (Dockerfile) means the
 rate limiter's per-IP key trusts a client-supplied `X-Forwarded-For`
 value, letting a leaked-token holder dodge the 60/minute cap — a
 documented, evaluated tradeoff, not an oversight. Full rationale is in
-the comment above `limiter` in `app/main.py`.
+the comment above `limiter` in `app/rate_limiter.py`.
+
+`POST /agent/ask` overrides this to a tighter 6/minute (see below) —
+LLM calls are slow and cost money, so a leaked token should be capped
+harder there than on the rest of the API. The mounted `/mcp` endpoint
+(see below) needed a separate fix: `SlowAPIMiddleware` runs for those
+requests too, but slowapi's own route-based limiting looks up the
+matched route's endpoint to pick a limit, and a Starlette `Mount` has no
+`.endpoint` — so it was silently exempt. `McpRateLimitMiddleware`
+(`app/rate_limiter.py`) closes that gap with a direct 20/minute check
+against the same shared limiter/storage, since `/mcp` exposes the same
+yfinance-backed tools as everything else here.
+
+## Portfolio assistant agent + MCP server
+
+`POST /agent/ask` is a chat endpoint: an LLM (Claude, via
+`app/services/llm/claude_provider.py`) reasons over the user's question and
+decides which read-only tools to call — it never computes a financial
+figure itself, only the app's existing deterministic services do
+(FIFO, live pricing, rollups). The response streams back as
+Server-Sent Events (`token`/`tool_call`/`tool_result`/`done`/`error`
+frames); the frontend resends the whole conversation each turn, so nothing
+is persisted server-side.
+
+The tool implementations live once, in `app/services/agent_tools.py`, and
+are registered onto a single `MCPServer` instance
+(`app/mcp_server.py`) — a real [MCP](https://modelcontextprotocol.io)
+server, mounted at `/mcp` (`app.mount(...)` in `main.py`). Starlette
+middleware wraps the whole app including this mount, so CORS still
+applies — what actually doesn't reach `/mcp` is SlowAPI's per-route
+limiting (it looks up a matched route's endpoint for a decorated limit,
+and a Mount has none, so it silently no-ops there); `McpRateLimitMiddleware`
+closes that gap with its own direct check (see "Rate limiting" above).
+Auth is genuinely separate: the mount has its own gate, not
+`get_authenticated_user_id`, since MCP clients aren't browser-hosted.
+Two things dispatch tool calls against that one registry:
+
+- **External MCP clients** (Claude Desktop, etc.) connect directly over
+  Streamable HTTP and authenticate via a bearer JWT, verified by
+  `app/dependencies/mcp_auth.py::JwtTokenVerifier` — the same
+  HS256/`NEXTAUTH_SECRET` + users-table-allowlist check as
+  `get_authenticated_user_id`, adapted to the `mcp` SDK's `TokenVerifier`
+  protocol. There's no self-service token issuance: a long-lived JWT is
+  manually minted and pasted into the external client's config. Building
+  real OAuth device-flow/token issuance is a deliberate future
+  improvement, not an oversight, for an app with an allowlist of one or
+  two real users.
+- **`/agent/ask`'s own loop** dispatches in-process, via
+  `mcp_server.list_tools()` / `mcp_server.call_tool(...)` (plain method
+  calls, not an HTTP request to its own `/mcp` mount) — this avoids a
+  same-process double round-trip and a self-auth problem the loopback
+  would otherwise need (minting the process a bearer token for its own
+  MCP server). The externally-connectable MCP server is what demonstrates
+  the protocol; the internal loop doesn't need to also speak MCP to
+  itself to get the same tool-registry benefit.
+
+Since MCP tool functions don't go through FastAPI's dependency system,
+each one opens its own short-lived DB session and resolves the caller's
+identity via `app/services/agent_context.py::resolve_user_id()` — which
+checks the MCP SDK's own `get_access_token()` (set for real MCP-client
+calls) and falls back to a contextvar the `/agent/ask` loop sets from its
+own `get_authenticated_user_id` result (real MCP auth never runs for that
+path).
+
+`LLMProvider` (`app/services/llm/base.py`) is a provider-agnostic seam:
+conversation history is a list of neutral `Turn` objects (`UserTurn` /
+`AssistantTurn` / `ToolResultsTurn`), plain JSON-Schema tool defs, and a
+system-prompt string. `GeminiProvider` and `ClaudeProvider` each translate
+that neutral history into their own wire shape at call time — Gemini's
+`Content`/`Part` objects with `function_call`/`function_response` parts,
+Claude's content blocks with `tool_use`/`tool_result` — since the two
+APIs structure a tool-calling turn differently enough that a shared dict
+shape would just be one provider's shape with the other translating out
+of it. `AGENT_PROVIDER` (`gemini` by default, or `claude`) selects which
+one `app/routers/agent.py::get_llm_provider()` returns; switching is
+config, not code.

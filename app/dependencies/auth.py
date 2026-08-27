@@ -12,6 +12,20 @@ from app.models import User
 DEV_USER_EMAIL = "dev@local.test"
 
 
+def get_or_create_dev_user(db: Session) -> User:
+    """Shared by every auth entry point (HTTP routes, MCP's TokenVerifier)
+    that needs the development/test bypass — a single place to change the
+    fixed dev user's shape rather than two copies drifting apart.
+    """
+    user = db.query(User).filter(User.email == DEV_USER_EMAIL).first()
+    if user is None:
+        user = User(id=str(uuid.uuid4()), email=DEV_USER_EMAIL, name="Dev User")
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    return user
+
+
 def get_authenticated_user_id(
     authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),
@@ -30,13 +44,7 @@ def get_authenticated_user_id(
     settings = get_settings()
 
     if settings.environment in ("development", "test"):
-        user = db.query(User).filter(User.email == DEV_USER_EMAIL).first()
-        if user is None:
-            user = User(id=str(uuid.uuid4()), email=DEV_USER_EMAIL, name="Dev User")
-            db.add(user)
-            db.commit()
-            db.refresh(user)
-        return user.id
+        return get_or_create_dev_user(db).id
 
     if not authorization or not authorization.startswith("Bearer "):
         raise UnauthorizedError()
