@@ -28,6 +28,22 @@ from app.routers import (
 # the yfinance-backed endpoints (Yahoo can rate-limit or block the whole
 # outbound IP for that) or bots probing public URLs and burning Render's
 # free-tier compute, not deliberate multi-user abuse.
+#
+# Known residual gap, evaluated and accepted: the Dockerfile's
+# --forwarded-allow-ips=* tells uvicorn to trust the left-most entry of an
+# inbound X-Forwarded-For header as the client IP, which is exactly the
+# entry a client fully controls (a well-behaved proxy appends its own hop
+# to the right, it doesn't get to overwrite the left). A leaked-token
+# holder can send a fresh X-Forwarded-For per request and get a fresh
+# rate-limit bucket every time, bypassing the 60/minute cap entirely.
+# Render publishes outbound IP ranges (for third parties allowlisting calls
+# this app makes out) but not the inbound edge/proxy range that would be
+# needed to scope --forwarded-allow-ips down from "*" - those are two
+# different things, and only the outbound one is documented. Given the
+# threat model above (a single/allowlisted-user app, not multi-tenant
+# abuse resistance), this is accepted rather than guessed at with an IP
+# range that could silently stop working or break real client IP
+# resolution.
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
 
