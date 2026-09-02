@@ -35,6 +35,7 @@ from app.schemas.portfolio import PortfolioRollup, TickerDetail
 from app.services.agent_context import resolve_user_id
 from app.services.allocation_service import compute_allocation
 from app.services.fifo import ProcessedTransaction
+from app.services.fundamentals.service import portfolio_fundamentals, ticker_fundamentals
 from app.services.mappers import portfolio_transaction_to_processed
 from app.services.passive_rollup_service import compute_passive_rollup
 from app.services.portfolio_rollup_service import compute_portfolio_rollup
@@ -130,6 +131,38 @@ def register_tools(mcp: MCPServer) -> None:
         with _tool_context() as (user_id, db):
             rollup: PassiveRollup = compute_passive_rollup(db, user_id, force_refresh=refresh)
             return rollup.model_dump(mode="json", by_alias=True)
+
+    # On an upstream 429 the fundamentals cache does a short bounded
+    # backoff (see app/services/fundamentals/cache.py) before falling back
+    # to stale/rate_limited — kept to a couple of seconds precisely
+    # because this runs inline like the tools above, not off-loop.
+    @mcp.tool()
+    async def get_portfolio_fundamentals() -> dict:
+        """Get company fundamentals for every open holding — valuation
+        multiples (P/E, P/B, P/S, PEG, EV/EBITDA), quality metrics (ROE,
+        operating/profit margin, FCF yield), leverage (debt/equity), and
+        growth — plus a per-metric value-investing verdict and
+        value-weighted portfolio aggregates. Call this for any question
+        about whether holdings are cheap/expensive/high-quality, or to
+        evaluate the portfolio "from a value investing perspective". ETFs,
+        gold, and crypto have no fundamentals and are reported as
+        `unavailable` and excluded from the aggregates (see
+        `coveredPercent`). Data is cached once per day; `stale` / `asOfDate`
+        say how fresh each holding is.
+        """
+        with _tool_context() as (user_id, db):
+            return portfolio_fundamentals(db, user_id)
+
+    @mcp.tool()
+    async def get_ticker_fundamentals(ticker: str) -> dict:
+        """Get company fundamentals and a value-investing metric-by-metric
+        verdict for one ticker already tracked in the portfolio. Call this
+        when a question is about the valuation or business quality of a
+        single holding. Returns `unavailable` for a security with no
+        published fundamentals (ETF / gold / crypto).
+        """
+        with _tool_context() as (user_id, db):
+            return ticker_fundamentals(db, ticker, user_id)
 
     @mcp.tool()
     async def compute_whatif(

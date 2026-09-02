@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     mcp_issuer_url: str = "http://localhost:8000"
     mcp_resource_server_url: str = "http://localhost:8000/mcp"
 
+    # Company-fundamentals data source for the value-investing agent tools
+    # (see app/services/fundamentals/). "yahoo" is the only provider today;
+    # the FundamentalsProvider seam (app/services/fundamentals/base.py) makes
+    # adding another a one-file change, not a rewrite. Results are cached in
+    # Postgres once per UTC day per symbol (ticker_fundamentals_cache).
+    fundamentals_provider: str = "yahoo"
+
     @model_validator(mode="after")
     def _require_real_secret_outside_dev(self) -> "Settings":
         if self.environment not in ("development", "test") and (

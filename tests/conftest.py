@@ -8,6 +8,7 @@ from app.db.session import engine, get_db
 from app.dependencies.auth import get_authenticated_user_id
 from app.main import app, limiter
 from app.models import User
+from app.services.fundamentals.cache import clear_fundamentals_cache
 from app.services.price_service import clear_quote_cache
 
 
@@ -15,10 +16,13 @@ from app.services.price_service import clear_quote_cache
 def _clear_quote_cache() -> Generator[None, None, None]:
     # price_service caches quotes across calls (see its module docstring).
     # Different tests often reuse the same ticker/currency with different
-    # mocked values, so the cache must not leak between tests.
+    # mocked values, so the cache must not leak between tests. The
+    # fundamentals in-process TTL layer has the same hazard.
     clear_quote_cache()
+    clear_fundamentals_cache()
     yield
     clear_quote_cache()
+    clear_fundamentals_cache()
 
 
 @pytest.fixture(autouse=True)
