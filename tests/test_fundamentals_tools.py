@@ -55,11 +55,17 @@ AAPL_FUNDAMENTALS = FundamentalsData(
     return_on_equity=1.4,
     operating_margin=0.30,
     profit_margin=0.25,
+    eps_trailing=6.0,
+    book_value_per_share=4.0,
     free_cash_flow=100e9,
+    total_revenue=390e9,
     debt_to_equity=140.0,
     dividend_yield=0.55,
     dividend_rate=1.0,
     payout_ratio=0.15,
+    financial_currency="USD",
+    growth_0y=0.08,
+    growth_1y=0.09,
 )
 
 
@@ -177,3 +183,59 @@ class TestGetPortfolioFundamentals:
         assert body["weightedAggregates"]["weightedPeTrailing"] == pytest.approx(24.0)
         assert body["weightedAggregates"]["coveredPercent"] < 100.0
         assert any("excluded from aggregates" in note for note in body["notes"])
+
+    async def test_holdings_carry_an_intrinsic_value_block(
+        self, db_session: Session, test_user: User, wire_tools
+    ) -> None:
+        _seed_holding(db_session, test_user, "AAPL", "NASDAQ", "USD")
+        wire_tools(FakeProvider({"AAPL": AAPL_FUNDAMENTALS}))
+        set_current_user_id(test_user.id)
+
+        body = _payload(await mcp_server.call_tool("get_portfolio_fundamentals", {}))
+
+        iv = body["holdings"][0]["valuation"]
+        assert iv["available"] is True
+        assert isinstance(iv["intrinsicValue"], (int, float))
+        assert iv["verdict"] in {"undervalued", "overvalued", "near fair value"}
+        assert any("Scenario-DCF" in note for note in body["notes"])
+
+
+class TestGetIntrinsicValue:
+    async def test_returns_a_dcf_estimate_for_a_tracked_holding(
+        self, db_session: Session, test_user: User, wire_tools
+    ) -> None:
+        _seed_holding(db_session, test_user, "AAPL", "NASDAQ", "USD")
+        wire_tools(FakeProvider({"AAPL": AAPL_FUNDAMENTALS}))
+        set_current_user_id(test_user.id)
+
+        body = _payload(await mcp_server.call_tool("get_intrinsic_value", {"ticker": "aapl"}))
+
+        assert body["ticker"] == "AAPL"
+        assert body["status"] == "ok"
+        iv = body["valuation"]
+        assert iv["available"] is True
+        assert iv["valuationBasis"] in {"EPS-based", "FCF-based", "Dividend-based", "Revenue-based"}
+        assert "marginOfSafetyPercent" in iv
+        assert iv["assessment"].startswith("Intrinsic Value")
+
+    async def test_reports_not_found_for_an_untracked_ticker(
+        self, db_session: Session, test_user: User, wire_tools
+    ) -> None:
+        wire_tools(FakeProvider({}))
+        set_current_user_id(test_user.id)
+
+        body = _payload(await mcp_server.call_tool("get_intrinsic_value", {"ticker": "TSLA"}))
+
+        assert body["found"] is False
+
+    async def test_reports_unavailable_for_an_etf(
+        self, db_session: Session, test_user: User, wire_tools
+    ) -> None:
+        _seed_holding(db_session, test_user, "VWRA", "SIX", "CHF")
+        wire_tools(FakeProvider({}, unavailable={"VWRA.SW"}))
+        set_current_user_id(test_user.id)
+
+        body = _payload(await mcp_server.call_tool("get_intrinsic_value", {"ticker": "VWRA"}))
+
+        assert body["status"] == "unavailable"
+        assert body.get("valuation") is None

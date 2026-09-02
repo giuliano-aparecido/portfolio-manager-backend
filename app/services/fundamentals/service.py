@@ -13,12 +13,15 @@ from app.models import TickerMetadata
 from app.schemas.agent import (
     FundamentalsMetric,
     HoldingFundamentals,
+    IntrinsicValue,
     PortfolioFundamentals,
     SecurityFundamentals,
+    SecurityIntrinsicValue,
     TickerNotFound,
     WeightedAggregates,
 )
 from app.services.fundamentals.cache import FundamentalsEntry, get_fundamentals
+from app.services.fundamentals.intrinsic_value import assess_intrinsic_value
 from app.services.fundamentals.screen import value_screen
 from app.services.portfolio_rollup_service import compute_portfolio_rollup
 from app.services.ticker_config import derive_yahoo_ticker
@@ -35,7 +38,11 @@ def _fcf_yield(free_cash_flow: float | None, market_cap: float | None) -> float 
     return free_cash_flow / market_cap
 
 
-def _security_fields(entry: FundamentalsEntry | None, ticker: str, yahoo_symbol: str) -> dict:
+def _entry_status(entry: FundamentalsEntry | None, ticker: str, yahoo_symbol: str) -> dict:
+    """The identity + status/message fields every fundamentals response
+    shape shares, plus `data` (the FundamentalsData, or None) so a caller
+    branches once without re-walking the entry. Callers pop `data` before
+    handing the rest to a schema."""
     base = {
         "ticker": ticker,
         "yahoo_symbol": yahoo_symbol,
@@ -43,18 +50,28 @@ def _security_fields(entry: FundamentalsEntry | None, ticker: str, yahoo_symbol:
         "stale": bool(entry and entry.stale),
     }
     if entry is None:
-        return {**base, "status": "error", "message": "fundamentals unavailable"}
+        return {**base, "status": "error", "message": "fundamentals unavailable", "data": None}
     if entry.unavailable:
-        return {**base, "status": "unavailable", "message": _UNAVAILABLE_MESSAGE}
+        return {**base, "status": "unavailable", "message": _UNAVAILABLE_MESSAGE, "data": None}
     if entry.data is None:
-        return {**base, "status": "error", "message": entry.error or "fundamentals unavailable"}
-
-    data = entry.data
-    screen = value_screen(data)
+        return {**base, "status": "error", "message": entry.error or "fundamentals unavailable", "data": None}
     return {
         **base,
         "status": "error" if entry.error else "ok",
         "message": _STALE_MESSAGE if entry.error else None,
+        "data": entry.data,
+    }
+
+
+def _security_fields(entry: FundamentalsEntry | None, ticker: str, yahoo_symbol: str) -> dict:
+    fields = _entry_status(entry, ticker, yahoo_symbol)
+    data = fields.pop("data")
+    if data is None:
+        return fields
+
+    screen = value_screen(data)
+    return {
+        **fields,
         "company_name": data.company_name,
         "sector": data.sector,
         "industry": data.industry,
@@ -81,6 +98,7 @@ def _security_fields(entry: FundamentalsEntry | None, ticker: str, yahoo_symbol:
         "screen_good_count": screen["goodCount"],
         "screen_poor_count": screen["poorCount"],
         "metrics": [FundamentalsMetric(**m) for m in screen["metrics"]],
+        "valuation": IntrinsicValue(**assess_intrinsic_value(data, ticker)),
     }
 
 
@@ -99,6 +117,27 @@ def ticker_fundamentals(db: Session, ticker: str, user_id: str) -> dict:
     entry = get_fundamentals(db, [yahoo_symbol]).get(yahoo_symbol)
     fields = _security_fields(entry, ticker, yahoo_symbol)
     return SecurityFundamentals(**fields).model_dump(mode="json", by_alias=True)
+
+
+def ticker_intrinsic_value(db: Session, ticker: str, user_id: str) -> dict:
+    ticker = ticker.upper()
+    metadata = (
+        db.query(TickerMetadata)
+        .filter(TickerMetadata.ticker == ticker, TickerMetadata.user_id == user_id)
+        .first()
+    )
+    if metadata is None:
+        return TickerNotFound(message=f"{ticker} isn't tracked in your portfolio.").model_dump(
+            mode="json", by_alias=True
+        )
+    yahoo_symbol = derive_yahoo_ticker(ticker, metadata.market)
+    entry = get_fundamentals(db, [yahoo_symbol]).get(yahoo_symbol)
+
+    fields = _entry_status(entry, ticker, yahoo_symbol)
+    data = fields.pop("data")
+    if data is not None:
+        fields["valuation"] = IntrinsicValue(**assess_intrinsic_value(data, ticker))
+    return SecurityIntrinsicValue(**fields).model_dump(mode="json", by_alias=True)
 
 
 def _weighted_average(pairs: list[tuple[float, float]]) -> float | None:
@@ -184,6 +223,18 @@ def portfolio_fundamentals(db: Session, user_id: str) -> dict:
         )
     if any_stale or any(h.stale for h in holdings):
         notes.append("Some holdings show last-good data because today's refresh failed (stale=true).")
+
+    valued = [h.valuation for h in holdings if h.valuation is not None]
+    verdicts = [v.verdict for v in valued if v.available]
+    if valued:
+        under = verdicts.count("undervalued")
+        over = verdicts.count("overvalued")
+        notes.append(
+            f"Scenario-DCF: {under} holding(s) screen undervalued, {over} overvalued, "
+            f"{len(verdicts) - under - over} near fair value; "
+            f"the model could not value {len(valued) - len(verdicts)} of the "
+            f"{len(valued)} stock holding(s) it assessed."
+        )
 
     result = PortfolioFundamentals(
         as_of=datetime.now(timezone.utc).date().isoformat(),

@@ -74,6 +74,41 @@ class FundamentalsMetric(CamelModel):
     note: str
 
 
+class IntrinsicValue(CamelModel):
+    """Scenario-DCF intrinsic value for one security, in its own trading
+    currency. `available` is False when the model can't produce a number
+    (no price, or the classified basis has no usable input) — `reason`
+    then carries the model's own wording. `gapPercent` is positive when
+    the market price is above intrinsic (overvalued); `marginOfSafetyPercent`
+    is its inverse (positive = buying below intrinsic).
+    """
+
+    available: bool
+    reason: str | None = None
+    currency: str | None = None
+    current_price: float | None = None
+    intrinsic_value: float | None = None
+    gap_percent: float | None = None
+    margin_of_safety_percent: float | None = None
+    verdict: str | None = None  # "undervalued" | "overvalued" | "near fair value"
+    valuation_basis: str | None = None  # "EPS-based" | "FCF-based" | "Dividend-based" | "Revenue-based"
+    assessment: str | None = None  # the model's rendered text block, verbatim
+
+
+class SecurityIntrinsicValue(CamelModel):
+    """get_intrinsic_value's response wrapper. `status` mirrors
+    SecurityFundamentals: "unavailable" for an ETF/gold/crypto with no
+    fundamentals to value at all."""
+
+    ticker: str
+    yahoo_symbol: str
+    status: Literal["ok", "unavailable", "error"]
+    message: str | None = None
+    as_of_date: str | None = None
+    stale: bool = False
+    valuation: IntrinsicValue | None = None
+
+
 class SecurityFundamentals(CamelModel):
     """One holding's fundamentals, in its own trading/reporting currency —
     never CHF. `status` is "ok" (data present), "unavailable" (an ETF /
@@ -116,6 +151,10 @@ class SecurityFundamentals(CamelModel):
     screen_good_count: int | None = None
     screen_poor_count: int | None = None
     metrics: list[FundamentalsMetric] = []
+
+    # Scenario-DCF intrinsic value / margin of safety — omitted (None) for
+    # ETFs, gold and crypto, or when the model can't value the security.
+    valuation: IntrinsicValue | None = None
 
 
 class HoldingFundamentals(SecurityFundamentals):

@@ -18,6 +18,7 @@ EXPECTED_TOOL_NAMES = {
     "get_passive_investments",
     "get_portfolio_fundamentals",
     "get_ticker_fundamentals",
+    "get_intrinsic_value",
     "compute_whatif",
 }
 

@@ -35,7 +35,11 @@ from app.schemas.portfolio import PortfolioRollup, TickerDetail
 from app.services.agent_context import resolve_user_id
 from app.services.allocation_service import compute_allocation
 from app.services.fifo import ProcessedTransaction
-from app.services.fundamentals.service import portfolio_fundamentals, ticker_fundamentals
+from app.services.fundamentals.service import (
+    portfolio_fundamentals,
+    ticker_fundamentals,
+    ticker_intrinsic_value,
+)
 from app.services.mappers import portfolio_transaction_to_processed
 from app.services.passive_rollup_service import compute_passive_rollup
 from app.services.portfolio_rollup_service import compute_portfolio_rollup
@@ -163,6 +167,22 @@ def register_tools(mcp: MCPServer) -> None:
         """
         with _tool_context() as (user_id, db):
             return ticker_fundamentals(db, ticker, user_id)
+
+    @mcp.tool()
+    async def get_intrinsic_value(ticker: str) -> dict:
+        """Estimate the intrinsic (fair) value of one holding with a
+        scenario-weighted 2-stage DCF, and compare it to the current price
+        as a margin of safety. Call this for "is X worth its price / how
+        much is X really worth / what's my margin of safety on X" style
+        questions. Returns the intrinsic value, the % gap vs price
+        (positive = overvalued), the valuation basis used (EPS / FCF /
+        Dividend / Revenue), and the model's own assessment text. Reports
+        `unavailable` for an ETF / gold / crypto, and an unavailable
+        intrinsic value when the model has no usable basis for the
+        company. All figures are in the security's own trading currency.
+        """
+        with _tool_context() as (user_id, db):
+            return ticker_intrinsic_value(db, ticker, user_id)
 
     @mcp.tool()
     async def compute_whatif(
