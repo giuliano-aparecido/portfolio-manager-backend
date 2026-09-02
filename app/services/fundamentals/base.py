@@ -79,6 +79,16 @@ class FundamentalsData:
     year_low: float | None = None
     year_high: float | None = None
 
+    # Near-term analyst-consensus inputs for the scenario-DCF model
+    # (app/services/fundamentals/valuation.py). Best-effort — all None when
+    # the extra Yahoo endpoints fail; the model falls back to a
+    # sustainable-growth / generic estimate.
+    growth_0y: float | None = None
+    growth_1y: float | None = None
+    growth_0y_low: float | None = None
+    growth_0y_high: float | None = None
+    recent_eps_surprise: float | None = None
+
     def to_payload(self) -> dict:
         return {f.name: getattr(self, f.name) for f in fields(self)}
 

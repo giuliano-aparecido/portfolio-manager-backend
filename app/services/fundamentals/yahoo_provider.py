@@ -19,6 +19,7 @@ Adapted from financial-sentiment-api's app/services/fundamentals.py
 
 import logging
 import math
+from dataclasses import replace
 
 import yfinance as yf
 
@@ -47,6 +48,36 @@ def _clean(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return None if math.isnan(value) else float(value)
+
+
+def _usable(value: object) -> bool:
+    """None and NaN both mean "not usable" — NaN passes a plain truthiness
+    check. Ported from financial-sentiment-api's fundamentals._usable.
+
+    Deliberately looser than `_clean`: the analyst-consensus fetches below
+    read raw pandas cells (numpy scalars, occasionally pandas nullables)
+    where `_clean`'s strict `isinstance(int|float)` would reject a
+    perfectly good numpy.float64. Callers coerce the survivors through
+    `_num()` before they reach the payload.
+    """
+    if value is None:
+        return False
+    try:
+        return not math.isnan(value)  # type: ignore[arg-type]
+    except TypeError:
+        return True
+
+
+def _num(value: object) -> float | None:
+    """Coerce a usable pandas/numpy cell to a plain float for JSONB —
+    a pandas NA / NaT that slipped past _usable would otherwise break
+    json.dumps at commit time."""
+    if not _usable(value):
+        return None
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def resolve_ticker(ticker: str) -> str:
@@ -127,15 +158,96 @@ def _to_data(symbol: str, info: dict) -> FundamentalsData:
     )
 
 
+def _fetch_growth_consensus(symbol: str) -> dict:
+    """Near-term consensus EPS growth from yfinance's earnings_estimate
+    table (0y / +1y), an input to the scenario-DCF model. All-None on any
+    non-429 failure or missing data — the model has a generic-growth
+    fallback for exactly this. Ported from financial-sentiment-api's
+    fundamentals._fetch_growth_consensus.
+    """
+    empty = {"growth_0y": None, "growth_1y": None, "growth_0y_low": None, "growth_0y_high": None}
+    try:
+        estimate = yf.Ticker(symbol).earnings_estimate
+        row_0y = estimate.loc["0y"]
+        row_1y = estimate.loc["+1y"]
+        year_ago = row_0y["yearAgoEps"]
+        growth_0y = row_0y["growth"]
+        growth_1y = row_1y["growth"]
+        low = row_0y["low"]
+        high = row_0y["high"]
+        if not _usable(year_ago) or year_ago == 0 or not _usable(growth_0y) or not _usable(growth_1y):
+            return empty
+        result = {
+            "growth_0y": _num(growth_0y),
+            "growth_1y": _num(growth_1y),
+            "growth_0y_low": None,
+            "growth_0y_high": None,
+        }
+        if _usable(low):
+            result["growth_0y_low"] = _num((low - year_ago) / abs(year_ago))
+        if _usable(high):
+            result["growth_0y_high"] = _num((high - year_ago) / abs(year_ago))
+        return result
+    except Exception as exc:  # noqa: BLE001
+        if _is_rate_limit_error(exc):
+            raise FundamentalsRateLimited(str(exc)) from exc
+        logger.warning("yfinance growth-estimate fetch failed for %s: %s", symbol, exc)
+        return empty
+
+
+def _fetch_recent_eps_surprise(symbol: str) -> float | None:
+    """Actual-vs-consensus EPS surprise (fraction) for the most recently
+    reported quarter, from yfinance's earnings_dates table — the DCF model
+    uses it to flag a likely one-time item in trailing EPS. None (not a
+    failure) when no reported row with a usable estimate exists yet. Ported
+    from financial-sentiment-api's fundamentals._fetch_recent_eps_surprise.
+    """
+    try:
+        dates = yf.Ticker(symbol).earnings_dates
+        reported = dates.dropna(subset=["Reported EPS"])
+        if reported.empty:
+            return None
+        row = reported.iloc[0]
+        estimate = row["EPS Estimate"]
+        actual = row["Reported EPS"]
+        if not _usable(estimate) or not _usable(actual) or estimate == 0:
+            return None
+        return _num((actual - estimate) / abs(estimate))
+    except Exception as exc:  # noqa: BLE001
+        if _is_rate_limit_error(exc):
+            raise FundamentalsRateLimited(str(exc)) from exc
+        logger.warning("yfinance earnings-surprise fetch failed for %s: %s", symbol, exc)
+        return None
+
+
 class YahooFundamentalsProvider:
     name = "yahoo"
 
     def fetch(self, yahoo_symbol: str) -> FundamentalsData:
         info = _fetch_info(yahoo_symbol)
+        symbol = yahoo_symbol
         if info is None:
             resolved = resolve_ticker(yahoo_symbol)
             if resolved != yahoo_symbol:
                 info = _fetch_info(resolved)
+                symbol = resolved
         if info is None:
             raise FundamentalsUnavailable(f"No Yahoo fundamentals for {yahoo_symbol}")
-        return _to_data(yahoo_symbol, info)
+
+        data = _to_data(yahoo_symbol, info)
+
+        # Two extra Yahoo endpoints, only feeding the scenario-DCF model.
+        # Skip them entirely for a security with no EPS at all — it can
+        # only be valued on the revenue basis, which uses neither an EPS
+        # growth consensus nor the trailing-EPS-surprise distortion check,
+        # so these calls would be pure rate-limit cost. Best-effort
+        # otherwise: a non-429 failure leaves the fields None (the model
+        # falls back to a sustainable-growth / generic estimate); a 429
+        # propagates so the daily cache retries the whole symbol.
+        if info.get("trailingEps") is None and info.get("forwardEps") is None:
+            return data
+        return replace(
+            data,
+            **_fetch_growth_consensus(symbol),
+            recent_eps_surprise=_fetch_recent_eps_surprise(symbol),
+        )

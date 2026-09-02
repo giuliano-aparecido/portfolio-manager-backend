@@ -2,22 +2,54 @@
 faked at its two entry points (Ticker / Search), matching the repo's
 monkeypatch style; no network, no DB."""
 
+import pandas as pd
 import pytest
 
 import app.services.fundamentals.yahoo_provider as yp
 from app.services.fundamentals.base import FundamentalsRateLimited, FundamentalsUnavailable
-from app.services.fundamentals.yahoo_provider import YahooFundamentalsProvider, _is_rate_limit_error, _to_data
+from app.services.fundamentals.yahoo_provider import (
+    YahooFundamentalsProvider,
+    _fetch_growth_consensus,
+    _fetch_recent_eps_surprise,
+    _is_rate_limit_error,
+    _to_data,
+)
 
 
 class _FakeTicker:
-    def __init__(self, info):
+    def __init__(self, info, *, earnings_estimate=None, earnings_dates=None):
         self._info = info
+        self._earnings_estimate = earnings_estimate
+        self._earnings_dates = earnings_dates
 
     @property
     def info(self):
         if isinstance(self._info, Exception):
             raise self._info
         return self._info
+
+    @property
+    def earnings_estimate(self):
+        if isinstance(self._earnings_estimate, Exception):
+            raise self._earnings_estimate
+        return self._earnings_estimate
+
+    @property
+    def earnings_dates(self):
+        if isinstance(self._earnings_dates, Exception):
+            raise self._earnings_dates
+        return self._earnings_dates
+
+
+def _estimate_df(*, growth_0y=0.08, growth_1y=0.09, year_ago=6.0, low=5.7, high=6.5):
+    return pd.DataFrame(
+        {"growth": [growth_0y, growth_1y], "yearAgoEps": [year_ago, year_ago], "low": [low, low], "high": [high, high]},
+        index=["0y", "+1y"],
+    )
+
+
+def _dates_df(*, estimate=1.5, reported=1.6):
+    return pd.DataFrame({"EPS Estimate": [estimate], "Reported EPS": [reported]})
 
 
 class _FakeSearch:
@@ -144,3 +176,98 @@ def test_is_rate_limit_error_recognises_common_markers(message):
 
 def test_is_rate_limit_error_false_for_ordinary_failures():
     assert _is_rate_limit_error(RuntimeError("connection reset")) is False
+
+
+# --- analyst-consensus fetches (scenario-DCF inputs) ---
+
+
+def test_fetch_growth_consensus_reads_the_0y_and_1y_rows(monkeypatch):
+    monkeypatch.setattr(yp.yf, "Ticker", lambda s: _FakeTicker({}, earnings_estimate=_estimate_df()))
+    out = _fetch_growth_consensus("AAPL")
+    assert out["growth_0y"] == 0.08
+    assert out["growth_1y"] == 0.09
+    assert round(out["growth_0y_low"], 4) == round((5.7 - 6.0) / 6.0, 4)
+    assert round(out["growth_0y_high"], 4) == round((6.5 - 6.0) / 6.0, 4)
+
+
+def test_fetch_growth_consensus_empty_when_year_ago_eps_is_zero(monkeypatch):
+    monkeypatch.setattr(yp.yf, "Ticker", lambda s: _FakeTicker({}, earnings_estimate=_estimate_df(year_ago=0.0)))
+    assert _fetch_growth_consensus("AAPL") == {
+        "growth_0y": None, "growth_1y": None, "growth_0y_low": None, "growth_0y_high": None
+    }
+
+
+def test_fetch_growth_consensus_empty_on_ordinary_failure(monkeypatch):
+    monkeypatch.setattr(yp.yf, "Ticker", lambda s: _FakeTicker({}, earnings_estimate=RuntimeError("no table")))
+    assert _fetch_growth_consensus("AAPL")["growth_0y"] is None
+
+
+def test_fetch_growth_consensus_raises_rate_limited_on_429(monkeypatch):
+    monkeypatch.setattr(
+        yp.yf, "Ticker", lambda s: _FakeTicker({}, earnings_estimate=RuntimeError("429 Too Many Requests"))
+    )
+    with pytest.raises(FundamentalsRateLimited):
+        _fetch_growth_consensus("AAPL")
+
+
+def test_fetch_recent_eps_surprise_is_a_fraction(monkeypatch):
+    monkeypatch.setattr(yp.yf, "Ticker", lambda s: _FakeTicker({}, earnings_dates=_dates_df(estimate=1.5, reported=1.6)))
+    assert round(_fetch_recent_eps_surprise("AAPL"), 4) == round((1.6 - 1.5) / 1.5, 4)
+
+
+def test_fetch_recent_eps_surprise_none_when_no_reported_rows(monkeypatch):
+    empty = pd.DataFrame({"EPS Estimate": [1.5], "Reported EPS": [float("nan")]})
+    monkeypatch.setattr(yp.yf, "Ticker", lambda s: _FakeTicker({}, earnings_dates=empty))
+    assert _fetch_recent_eps_surprise("AAPL") is None
+
+
+def test_fetch_recent_eps_surprise_raises_rate_limited_on_429(monkeypatch):
+    monkeypatch.setattr(
+        yp.yf, "Ticker", lambda s: _FakeTicker({}, earnings_dates=RuntimeError("HTTP Error 429"))
+    )
+    with pytest.raises(FundamentalsRateLimited):
+        _fetch_recent_eps_surprise("AAPL")
+
+
+def test_fetch_populates_the_dcf_input_fields(monkeypatch):
+    monkeypatch.setattr(
+        yp.yf,
+        "Ticker",
+        lambda s: _FakeTicker(FULL_INFO, earnings_estimate=_estimate_df(), earnings_dates=_dates_df()),
+    )
+    data = YahooFundamentalsProvider().fetch("AAPL")
+    assert data.growth_0y == 0.08
+    assert data.growth_1y == 0.09
+    assert data.recent_eps_surprise is not None
+    assert data.pe_trailing == 31.2  # base .info fields still present
+
+
+def test_fetch_skips_the_consensus_endpoints_when_there_is_no_eps(monkeypatch):
+    # A loss-making / pre-profit name is valued on the revenue basis, which
+    # uses neither the EPS growth consensus nor the trailing-EPS surprise —
+    # those 2 extra Yahoo calls must not fire.
+    calls: list[str] = []
+    monkeypatch.setattr(yp, "_fetch_growth_consensus", lambda s: calls.append("growth") or {})
+    monkeypatch.setattr(yp, "_fetch_recent_eps_surprise", lambda s: calls.append("surprise"))
+    no_eps = {k: v for k, v in FULL_INFO.items() if k != "trailingEps"}  # FULL_INFO has no forwardEps either
+    monkeypatch.setattr(yp.yf, "Ticker", lambda s: _FakeTicker(no_eps))
+
+    data = YahooFundamentalsProvider().fetch("LOSSCO")
+
+    assert calls == []
+    assert data.growth_0y is None
+    assert data.market_cap == 2.95e12  # the .info fields still come through
+
+
+def test_fetch_survives_missing_consensus_tables(monkeypatch):
+    # A stock with .info but no earnings_estimate/earnings_dates must still
+    # return a full FundamentalsData, just with the DCF inputs None.
+    monkeypatch.setattr(
+        yp.yf,
+        "Ticker",
+        lambda s: _FakeTicker(FULL_INFO, earnings_estimate=RuntimeError("n/a"), earnings_dates=RuntimeError("n/a")),
+    )
+    data = YahooFundamentalsProvider().fetch("AAPL")
+    assert data.market_cap == 2.95e12
+    assert data.growth_0y is None
+    assert data.recent_eps_surprise is None
