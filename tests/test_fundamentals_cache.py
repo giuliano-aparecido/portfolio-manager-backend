@@ -129,6 +129,95 @@ class TestDailyGate:
         assert result["AAPL"].data.pe_trailing == 20.0
 
 
+class TestPayloadShapeVersion:
+    def test_a_row_with_an_older_payload_version_is_refetched_within_its_day(
+        self, db_session: Session, no_sleep
+    ):
+        # Simulates a row written by a previous deploy: today's date, no
+        # error, but a payload shape behind the current model inputs.
+        db_session.add(
+            TickerFundamentalsCache(
+                provider="yahoo", yahoo_symbol="AAPL", payload={"symbol": "AAPL", "pe_trailing": 9.9},
+                as_of_date=DAY1, unavailable=False,
+                payload_version=cache_module.CACHE_PAYLOAD_VERSION - 1,
+            )
+        )
+        db_session.flush()
+        provider = FakeProvider()
+
+        result = get_fundamentals(db_session, ["AAPL"], provider=provider, today=DAY1, sleep=no_sleep)
+
+        assert provider.calls == ["AAPL"]  # refetched despite as_of_date == today
+        assert result["AAPL"].data.pe_trailing == 20.0
+        assert _rows(db_session)["AAPL"].payload_version == cache_module.CACHE_PAYLOAD_VERSION
+
+    def test_a_null_payload_version_row_is_refetched(self, db_session: Session, no_sleep):
+        db_session.add(
+            TickerFundamentalsCache(
+                provider="yahoo", yahoo_symbol="AAPL", payload={"symbol": "AAPL"}, as_of_date=DAY1,
+                unavailable=False, payload_version=None,
+            )
+        )
+        db_session.flush()
+        provider = FakeProvider()
+
+        get_fundamentals(db_session, ["AAPL"], provider=provider, today=DAY1, sleep=no_sleep)
+
+        assert provider.calls == ["AAPL"]
+
+    def test_a_current_version_row_is_served_without_refetch(self, db_session: Session, no_sleep):
+        provider = FakeProvider()
+        get_fundamentals(db_session, ["AAPL"], provider=provider, today=DAY1, sleep=no_sleep)
+        assert _rows(db_session)["AAPL"].payload_version == cache_module.CACHE_PAYLOAD_VERSION
+        cache_module.clear_fundamentals_cache()
+
+        result = get_fundamentals(db_session, ["AAPL"], provider=provider, today=DAY1, sleep=no_sleep)
+
+        assert provider.calls == ["AAPL"]  # still just the one call
+        assert result["AAPL"].data is not None
+
+    def test_an_old_unavailable_row_is_not_refetched(self, db_session: Session, no_sleep):
+        # An ETF's "no fundamentals" verdict doesn't depend on payload shape.
+        db_session.add(
+            TickerFundamentalsCache(
+                provider="yahoo", yahoo_symbol="VWRA.SW", payload=None, unavailable=True,
+                as_of_date=DAY1, payload_version=None,
+            )
+        )
+        db_session.flush()
+        provider = FakeProvider()
+
+        result = get_fundamentals(db_session, ["VWRA.SW"], provider=provider, today=DAY1, sleep=no_sleep)
+
+        assert provider.calls == []
+        assert result["VWRA.SW"].unavailable is True
+
+    def test_version_is_stamped_on_an_unavailable_write(self, db_session: Session, no_sleep):
+        provider = FakeProvider(script={"VWRA.SW": ["unavailable"]})
+        get_fundamentals(db_session, ["VWRA.SW"], provider=provider, today=DAY1, sleep=no_sleep)
+        row = _rows(db_session)["VWRA.SW"]
+        assert row.unavailable is True
+        assert row.payload_version == cache_module.CACHE_PAYLOAD_VERSION
+
+    def test_stale_shape_row_served_stale_when_its_refetch_fails(self, db_session: Session, no_sleep):
+        db_session.add(
+            TickerFundamentalsCache(
+                provider="yahoo", yahoo_symbol="AAPL",
+                payload={"symbol": "AAPL", "pe_trailing": 9.9}, as_of_date=DAY1, unavailable=False,
+                payload_version=cache_module.CACHE_PAYLOAD_VERSION - 1,
+            )
+        )
+        db_session.flush()
+
+        result = get_fundamentals(
+            db_session, ["AAPL"], provider=FakeProvider(script={"AAPL": ["429"]}), today=DAY1, sleep=no_sleep
+        )
+
+        assert result["AAPL"].stale is True
+        assert result["AAPL"].data.pe_trailing == 9.9  # old payload still served
+        assert result["AAPL"].error == "rate_limited"
+
+
 class TestRateLimitRetry:
     def test_retries_only_the_throttled_symbol(self, db_session: Session, no_sleep):
         provider = FakeProvider(script={"MSFT": ["429", "ok"]})

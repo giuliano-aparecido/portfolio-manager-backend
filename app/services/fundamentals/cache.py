@@ -47,6 +47,14 @@ logger = logging.getLogger(__name__)
 # marked `rate_limited` and retried on the next call / next day.
 _RETRY_BACKOFF: tuple[float, ...] = (0.5, 1.5)
 
+# Shape version of the JSONB `payload`. Bump this whenever FundamentalsData
+# gains (or renames) a field the screen / valuation models actually read,
+# so rows written by an older deploy are refetched instead of silently
+# feeding those models a None where real data now exists.
+#   1 — initial fundamentals feature (no analyst-consensus inputs)
+#   2 — added growth_0y/1y/low/high + recent_eps_surprise for the DCF model
+CACHE_PAYLOAD_VERSION = 2
+
 _MEM_TTL_SECONDS = 120.0
 _MEM_MAX_ENTRIES = 512
 _mem_lock = threading.Lock()
@@ -119,10 +127,20 @@ def _load_rows(db: Session, provider_name: str, symbols: Iterable[str]) -> dict[
     return {r.yahoo_symbol: r for r in rows}
 
 
+def _stale_shape(row: TickerFundamentalsCache) -> bool:
+    """A payload written before the current CACHE_PAYLOAD_VERSION is missing
+    fields the models now read — refetch it. `unavailable` rows carry no
+    payload and don't depend on its shape, so they're exempt; a future
+    CACHE_PAYLOAD_VERSION bump that adds a field relevant to a
+    currently-unavailable security would need to drop this exemption."""
+    return not row.unavailable and (row.payload_version or 0) < CACHE_PAYLOAD_VERSION
+
+
 def _fresh_entry(symbol: str, row: TickerFundamentalsCache | None, today: date) -> FundamentalsEntry | None:
-    """An entry only if `row` already holds today's data with no pending
-    error; otherwise None, meaning "attempt a fetch"."""
-    if row is None or row.as_of_date != today or row.fetch_error is not None:
+    """An entry only if `row` already holds today's data, at the current
+    payload shape, with no pending error; otherwise None, meaning
+    "attempt a fetch"."""
+    if row is None or row.as_of_date != today or row.fetch_error is not None or _stale_shape(row):
         return None
     if row.unavailable:
         return FundamentalsEntry(symbol, None, today, stale=False, unavailable=True, error=None)
@@ -144,10 +162,12 @@ def _fallback_entry(symbol: str, row: TickerFundamentalsCache | None, today: dat
             symbol,
             FundamentalsData.from_payload(row.payload),
             row.as_of_date,
-            stale=row.as_of_date != today,
+            stale=row.as_of_date != today or _stale_shape(row),
             unavailable=False,
             error=row.fetch_error,
         )
+    # Empty payload: nothing to be "stale" about — data=None + error
+    # already signal the degradation, so _stale_shape isn't folded in here.
     return FundamentalsEntry(
         symbol, None, row.as_of_date, stale=False, unavailable=False, error=row.fetch_error or "unavailable"
     )
@@ -254,12 +274,14 @@ def _apply_fetched(
         row = _row_for(db, provider_name, symbol, rows)
         if outcome.kind == "ok" and outcome.data is not None:
             row.payload = outcome.data.to_payload()
+            row.payload_version = CACHE_PAYLOAD_VERSION
             row.unavailable = False
             row.as_of_date = today
             row.fetched_at = stamp
             row.fetch_error = None
         elif outcome.kind == "unavailable":
             row.payload = None
+            row.payload_version = CACHE_PAYLOAD_VERSION
             row.unavailable = True
             row.as_of_date = today
             row.fetched_at = stamp

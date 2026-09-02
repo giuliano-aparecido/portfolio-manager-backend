@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,6 +37,14 @@ class TickerFundamentalsCache(Base):
     # succeeded and only `fetch_error` is populated.
     payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     unavailable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Shape version of `payload` — bumped when FundamentalsData gains a
+    # field the screen / valuation models read (see cache.CACHE_PAYLOAD_VERSION).
+    # A row whose version is behind the current one is treated as needing a
+    # refetch even inside its once-per-day window, so a deploy that adds a
+    # model input doesn't silently serve degraded values off old rows.
+    # NULL = written before this column existed (implicitly the oldest shape).
+    payload_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # The UTC calendar date `payload` was fetched for — the once-per-day
     # gate. NULL until a fetch (successful or "unavailable") has happened.
