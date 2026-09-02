@@ -138,6 +138,61 @@ class TestAgentAskHappyPath:
         assert second_turn_history[-1].results[0].tool_call_id == "tc1"
         assert "AAPL" in second_turn_history[-1].results[0].content
 
+    def test_dispatches_get_portfolio_fundamentals_end_to_end(
+        self, authed_client: TestClient, db_session: Session, test_user: User, agent_session_factory, monkeypatch
+    ) -> None:
+        add_ticker_and_buy(db_session, test_user)
+        monkeypatch.setattr(
+            "app.services.portfolio_rollup_service.fetch_current_price",
+            lambda symbol, force_refresh=False: PriceQuote(
+                price=150.0, currency="USD", timestamp=datetime.now(timezone.utc), source="yahoo",
+                daily_change_percent=1.0, daily_change=1.5,
+            ),
+        )
+        monkeypatch.setattr(
+            "app.services.portfolio_rollup_service.fetch_fx_rate_to_chf", lambda ccy, force_refresh=False: 0.9
+        )
+
+        from app.services.fundamentals.base import FundamentalsData
+
+        class _FakeProvider:
+            name = "yahoo"
+
+            def fetch(self, symbol: str) -> FundamentalsData:
+                return FundamentalsData(symbol=symbol, sector="Technology", pe_trailing=19.0, market_cap=1e12,
+                                        price=150.0, return_on_equity=0.3, operating_margin=0.3)
+
+        monkeypatch.setattr(
+            "app.services.fundamentals.cache.get_fundamentals_provider", lambda: _FakeProvider()
+        )
+
+        provider = FakeLLMProvider(
+            turns=[
+                [
+                    AgentEvent(
+                        type="tool_call_start",
+                        tool_call=ToolCallRequest(id="tc1", name="get_portfolio_fundamentals", input={}),
+                    ),
+                    AgentEvent(type="turn_end"),
+                ],
+                [AgentEvent(type="text_delta", text="Your book screens reasonably."), AgentEvent(type="turn_end")],
+            ]
+        )
+        override_llm_provider(provider)
+
+        response = authed_client.post(
+            "/agent/ask",
+            json={"messages": [{"role": "user", "content": "evaluate my portfolio from a value investing perspective"}]},
+        )
+
+        assert response.status_code == 200
+        assert '"name": "get_portfolio_fundamentals"' in response.text
+        assert "event: tool_result" in response.text
+        assert "event: done" in response.text
+        tool_result = provider.calls[1][-1].results[0].content
+        assert "weightedAggregates" in tool_result
+        assert "AAPL" in tool_result
+
     def test_no_tool_call_returns_text_and_done_in_one_turn(self, authed_client: TestClient) -> None:
         provider = FakeLLMProvider(
             turns=[[AgentEvent(type="text_delta", text="Hello!"), AgentEvent(type="turn_end")]]

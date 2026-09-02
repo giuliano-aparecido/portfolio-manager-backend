@@ -16,6 +16,8 @@ EXPECTED_TOOL_NAMES = {
     "get_allocation",
     "get_ticker_detail",
     "get_passive_investments",
+    "get_portfolio_fundamentals",
+    "get_ticker_fundamentals",
     "compute_whatif",
 }
 
@@ -49,7 +51,7 @@ def same_connection_session_factory(db_session: Session):
 
 
 class TestMcpServerToolRegistration:
-    async def test_registers_the_expected_five_tools(self) -> None:
+    async def test_registers_the_expected_tools(self) -> None:
         tools = await mcp_server.list_tools()
         assert {t.name for t in tools} == EXPECTED_TOOL_NAMES
 
