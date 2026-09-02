@@ -267,7 +267,7 @@ class TestPortfolioCompositionSweep:
         get_fundamentals(db_session, ["AAPL"], provider=FakeProvider(), today=DAY1, sleep=no_sleep)
         cache_module.clear_fundamentals_cache()
 
-        def boom(*_args):
+        def boom(*_args, **_kwargs):
             raise AssertionError("sweep should only run inside the refresh path")
 
         monkeypatch.setattr(cache_module, "_sweep_unheld", boom)

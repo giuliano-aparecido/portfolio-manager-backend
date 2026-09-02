@@ -160,17 +160,22 @@ def _advisory_lock(db: Session, provider_name: str) -> None:
     )
 
 
-def _sweep_unheld(db: Session, provider_name: str) -> None:
+def _sweep_unheld(db: Session, provider_name: str, keep: set[str]) -> None:
     """Delete cache rows for symbols no ticker_metadata row (any user) maps
     to any more — table hygiene after an add/remove changes the held set.
-    A row is only dead once nobody holds it (the cache is not per-user)."""
-    held: set[str] = set()
+    A row is only dead once nobody holds it (the cache is not per-user).
+
+    `keep` is the set of symbols this call is about to (re)write — they're
+    never swept, even if no metadata currently maps to them, so the sweep
+    can't yank a row out from under the _apply_fetched that follows.
+    """
+    held: set[str] = set(keep)
     for tm in db.query(TickerMetadata.ticker, TickerMetadata.market).all():
         try:
             held.add(derive_yahoo_ticker(tm.ticker, tm.market))
         except Exception:  # noqa: BLE001 — a bad market string must not abort the sweep
             logger.warning("could not derive Yahoo symbol for %s/%s during cache sweep", tm.ticker, tm.market)
-    if not held:
+    if not held:  # nothing to compare against — never means "delete everything"
         return
     for row in db.query(TickerFundamentalsCache).filter(TickerFundamentalsCache.provider == provider_name).all():
         if row.yahoo_symbol not in held:
@@ -328,7 +333,10 @@ def get_fundamentals(
             result[symbol] = entry
             _mem_put(provider_name, entry)
 
-    _sweep_unheld(db, provider_name)
+    # keep = every symbol this call was asked about, so the sweep can never
+    # delete a row another step here is about to write or that we've
+    # already handed back in `result`.
+    _sweep_unheld(db, provider_name, keep=set(symbols))
     if not still:
         db.commit()
         return result
