@@ -98,7 +98,7 @@ def test_dividend_does_not_touch_shares_or_cost_basis() -> None:
     assert result.realized_gains == []
 
 
-def test_drip_shares_excluded_from_cost_basis_but_included_in_share_count() -> None:
+def test_drip_shares_included_in_cost_basis_and_share_count() -> None:
     result = process_ticker(
         [
             txn("2024-01-01", "BUY", quantity=10, price_per_share=100, fx_rate_to_chf=1.0),
@@ -107,7 +107,7 @@ def test_drip_shares_excluded_from_cost_basis_but_included_in_share_count() -> N
     )
 
     assert result.current_shares == 12
-    assert result.current_cost_basis_native == 1000  # DRIP's 2*110 excluded
+    assert result.current_cost_basis_native == 1220  # 10*100 + 2*110 — DRIP lot cost included
 
 
 def test_overselling_raises_with_ticker_date_and_shortfall_in_message() -> None:

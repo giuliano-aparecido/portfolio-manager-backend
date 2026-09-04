@@ -88,10 +88,12 @@ would be the more conventional choice for a production financial system.
 lot onto a queue; SELL consumes the oldest lots first. Each unit sold uses
 *that lot's own* historical `fx_rate_to_chf` for its CHF cost basis, never
 today's rate — so realized gains reflect the FX rate that was actually in
-effect when the shares were bought. DRIP-originated lots are excluded from
-realized-gain cost basis calculations by design — a DRIP reinvestment is
-modeled as its own BUY at the reinvestment price, so its cost basis is
-already correctly captured there.
+effect when the shares were bought. A DRIP reinvestment is modeled as its
+own BUY at the reinvestment price, so its cost is included in both
+realized-gain cost basis (when the DRIP lot is later sold) and in the
+current/unrealized cost basis (while it's still held) — the same
+treatment as any other BUY lot, deliberately, so `average_cost_per_share`
+reflects the true cost of every share actually held.
 
 **Passive ledger** (`services/ledger.py`): cost basis is simply the net of
 all deposits minus withdrawals. A separate integrity check rejects any
