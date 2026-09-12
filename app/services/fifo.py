@@ -128,12 +128,8 @@ def process_ticker(transactions: list[ProcessedTransaction]) -> FIFOResult:
             raise ValueError(f"Unknown transaction type: {txn.type}")
 
     current_shares = sum(lot.qty for lot in lots)
-    # DRIP-originated lots are excluded from cost basis — only original BUY
-    # shares count.
-    current_cost_basis_native = sum(lot.qty * lot.cost_per_share for lot in lots if not lot.is_from_drip)
-    current_cost_basis_chf = sum(
-        lot.qty * lot.cost_per_share * lot.fx_rate_to_chf for lot in lots if not lot.is_from_drip
-    )
+    current_cost_basis_native = sum(lot.qty * lot.cost_per_share for lot in lots)
+    current_cost_basis_chf = sum(lot.qty * lot.cost_per_share * lot.fx_rate_to_chf for lot in lots)
     total_realized_gain_native = sum(r.gain_native for r in realized)
     total_realized_gain_chf = sum(r.gain_chf for r in realized)
 

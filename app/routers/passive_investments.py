@@ -14,6 +14,14 @@ from app.utils import to_number
 
 router = APIRouter(prefix="/passive-investments", tags=["passive-investments"])
 
+GAIN_LOSS_PCT_TOLERANCE = 1e-9
+
+
+def _gain_loss_pct_changed(new: float | None, old: float | None) -> bool:
+    if new is None or old is None:
+        return new != old
+    return abs(new - old) > GAIN_LOSS_PCT_TOLERANCE
+
 
 def _parse_and_validate_investment(body) -> dict:
     name = (body.name or "").strip()
@@ -101,7 +109,7 @@ def update_passive_investment(
             raise AppError(400, f"gainLossPct must be a number >= {MIN_GAIN_LOSS_PCT}")
         gain_loss_pct = parsed_gain_loss_pct
 
-    gain_loss_changed = gain_loss_pct != existing.gain_loss_pct
+    gain_loss_changed = _gain_loss_pct_changed(gain_loss_pct, existing.gain_loss_pct)
 
     existing.name = parsed["name"]
     existing.type = parsed["type"]
