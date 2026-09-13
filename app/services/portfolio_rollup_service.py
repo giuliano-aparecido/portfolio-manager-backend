@@ -9,13 +9,11 @@ from sqlalchemy.orm import Session
 
 from app.models import PortfolioTransaction, TickerMetadata
 from app.schemas.portfolio import ClosedTickerRollup, OpenTickerRollup, PortfolioRollup, TickerPriceError
+from app.services.concurrency import MAX_FETCH_WORKERS
 from app.services.fifo import TOLERANCE, process_ticker
 from app.services.mappers import portfolio_transaction_to_processed
 from app.services.price_service import fetch_current_price, fetch_fx_rate_to_chf
 from app.services.ticker_config import derive_yahoo_ticker
-
-# Matches app/services/fundamentals/cache.py's _MAX_FETCH_WORKERS.
-_MAX_PRICE_FETCH_WORKERS = 8
 
 
 def compute_portfolio_rollup(db: Session, user_id: str | None = None, *, force_refresh: bool = False) -> PortfolioRollup:
@@ -115,7 +113,7 @@ def compute_portfolio_rollup(db: Session, user_id: str | None = None, *, force_r
             return None, TickerPriceError(ticker=candidate["ticker"], error=str(exc))
 
     if open_candidates:
-        with ThreadPoolExecutor(max_workers=min(len(open_candidates), _MAX_PRICE_FETCH_WORKERS)) as pool:
+        with ThreadPoolExecutor(max_workers=min(len(open_candidates), MAX_FETCH_WORKERS)) as pool:
             for row, error in pool.map(fetch_open_ticker, open_candidates):
                 if row is not None:
                     open_tickers.append(row)
