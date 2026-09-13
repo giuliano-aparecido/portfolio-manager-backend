@@ -14,6 +14,7 @@ from app.services.mappers import portfolio_transaction_to_processed
 from app.services.price_service import fetch_current_price, fetch_fx_rate_to_chf
 from app.services.ticker_config import derive_yahoo_ticker
 
+# Matches app/services/fundamentals/cache.py's _MAX_FETCH_WORKERS.
 _MAX_PRICE_FETCH_WORKERS = 8
 
 

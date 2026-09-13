@@ -9,6 +9,7 @@ from app.services.ledger import PassiveLedgerTxn, compute_net_balance
 from app.services.price_service import fetch_fx_rate_to_chf
 from app.services.recurring import materialize_due_recurring_deposits
 
+# Matches app/services/fundamentals/cache.py's _MAX_FETCH_WORKERS.
 _MAX_FX_FETCH_WORKERS = 8
 
 

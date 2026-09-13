@@ -2,7 +2,11 @@ from app.exceptions import AppError
 
 
 def parse_int_id(value: str, message: str = "invalid id") -> int:
-    """Parses a numeric path param, raising AppError(400, message) on failure."""
+    """Shared `int(path_param)` parsing for router path params - every route
+    taking a numeric id in the path needs the same "not a valid int -> 400"
+    handling, previously duplicated per-router with slightly different
+    messages (preserved here via `message` rather than unified, since at
+    least one test asserts on the exact existing string)."""
     try:
         return int(value)
     except ValueError:
