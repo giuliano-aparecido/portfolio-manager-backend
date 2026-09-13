@@ -79,6 +79,33 @@ class TestPassiveRollupRoute:
         authed_client.get("/passive-rollup?refresh=true")
         assert received["force_refresh"] is True
 
+    def test_fx_fetch_thread_pool_is_capped_at_max_fetch_workers(
+        self, authed_client: TestClient, db_session: Session, test_user: User, monkeypatch
+    ) -> None:
+        from app.services.concurrency import MAX_FETCH_WORKERS
+
+        currencies = [f"C{i:02d}" for i in range(MAX_FETCH_WORKERS + 2)]
+        for i, ccy in enumerate(currencies):
+            db_session.add(PassiveInvestment(user_id=test_user.id, name=f"Fund {i}", type="CASH", currency=ccy))
+        db_session.flush()
+
+        monkeypatch.setattr("app.services.passive_rollup_service.fetch_fx_rate_to_chf", lambda ccy, force_refresh=False: 1.0)
+
+        seen_max_workers: list[int] = []
+        real_thread_pool_executor = __import__("concurrent.futures", fromlist=["ThreadPoolExecutor"]).ThreadPoolExecutor
+
+        class SpyThreadPoolExecutor(real_thread_pool_executor):
+            def __init__(self, *args, max_workers=None, **kwargs):
+                seen_max_workers.append(max_workers)
+                super().__init__(*args, max_workers=max_workers, **kwargs)
+
+        monkeypatch.setattr("app.services.passive_rollup_service.ThreadPoolExecutor", SpyThreadPoolExecutor)
+
+        response = authed_client.get("/passive-rollup")
+        assert response.status_code == 200
+        assert len(currencies) > MAX_FETCH_WORKERS
+        assert seen_max_workers == [MAX_FETCH_WORKERS]
+
     def test_unexpected_exception_returns_generic_message_not_the_raw_text(
         self, authed_client: TestClient, monkeypatch
     ) -> None:

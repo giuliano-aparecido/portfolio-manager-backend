@@ -36,6 +36,7 @@ from app.services.fundamentals.base import (
     FundamentalsUnavailable,
     get_fundamentals_provider,
 )
+from app.services.concurrency import MAX_FETCH_WORKERS
 from app.services.ticker_config import derive_yahoo_ticker
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,6 @@ _MEM_TTL_SECONDS = 120.0
 _MEM_MAX_ENTRIES = 512
 _mem_lock = threading.Lock()
 _mem: dict[tuple[str, str], tuple[float, "FundamentalsEntry"]] = {}
-
-_MAX_FETCH_WORKERS = 8
 
 
 def clear_fundamentals_cache() -> None:
@@ -220,7 +219,7 @@ def _fetch_many(
     if len(symbols) == 1:
         results = [_fetch_one(provider, symbols[0])]
     else:
-        with ThreadPoolExecutor(max_workers=min(len(symbols), _MAX_FETCH_WORKERS)) as pool:
+        with ThreadPoolExecutor(max_workers=min(len(symbols), MAX_FETCH_WORKERS)) as pool:
             results = list(pool.map(lambda s: _fetch_one(provider, s), symbols))
     fetched: dict[str, _Fetched] = {}
     rate_limited: list[str] = []

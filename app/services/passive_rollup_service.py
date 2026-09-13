@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models import PassiveInvestment, PassiveTransaction
 from app.schemas.passive import PassiveFxError, PassiveInvestmentRollupRow, PassiveRollup
+from app.services.concurrency import MAX_FETCH_WORKERS
 from app.services.ledger import PassiveLedgerTxn, compute_net_balance
 from app.services.price_service import fetch_fx_rate_to_chf
 from app.services.recurring import materialize_due_recurring_deposits
@@ -43,7 +44,7 @@ def compute_passive_rollup(db: Session, user_id: str | None = None, *, force_ref
             return ccy, None, str(exc)
 
     if distinct_currencies:
-        with ThreadPoolExecutor(max_workers=len(distinct_currencies)) as pool:
+        with ThreadPoolExecutor(max_workers=min(len(distinct_currencies), MAX_FETCH_WORKERS)) as pool:
             for ccy, rate, error in pool.map(fetch_fx, distinct_currencies):
                 if rate is not None:
                     fx_rate_by_currency[ccy] = rate

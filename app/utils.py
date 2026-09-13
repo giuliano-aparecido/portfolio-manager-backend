@@ -1,3 +1,14 @@
+from app.exceptions import AppError
+
+
+def parse_int_id(value: str, message: str = "invalid id") -> int:
+    """Parses a numeric path param, raising AppError(400, message) on failure."""
+    try:
+        return int(value)
+    except ValueError:
+        raise AppError(400, message) from None
+
+
 def to_number(value: object) -> float | None:
     """Mirrors JS's Number(x) for validation purposes: returns None (the
     NaN equivalent) instead of raising, so callers can uniformly write

@@ -102,6 +102,44 @@ class TestPortfolioRollupRoute:
         assert body["closedTickers"] == []
         assert body["totalCostBasisCHF"] == 0
 
+    def test_price_fetch_concurrency_never_exceeds_max_fetch_workers(
+        self, authed_client: TestClient, db_session: Session, test_user: User, monkeypatch
+    ) -> None:
+        import threading
+        import time
+
+        from app.services.concurrency import MAX_FETCH_WORKERS
+
+        num_tickers = MAX_FETCH_WORKERS + 5
+        for i in range(num_tickers):
+            add_ticker_and_buy(db_session, test_user, ticker=f"T{i}")
+
+        lock = threading.Lock()
+        active = 0
+        peak = 0
+
+        def fake_fetch_current_price(yahoo_ticker: str, force_refresh: bool = False) -> PriceQuote:
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return PriceQuote(
+                price=150.0, currency="USD", timestamp=datetime.now(timezone.utc), source="yahoo",
+                daily_change_percent=1.0, daily_change=1.5,
+            )
+
+        monkeypatch.setattr("app.services.portfolio_rollup_service.fetch_current_price", fake_fetch_current_price)
+        monkeypatch.setattr("app.services.portfolio_rollup_service.fetch_fx_rate_to_chf", lambda ccy, force_refresh=False: 0.9)
+
+        response = authed_client.get("/portfolio-rollup")
+        assert response.status_code == 200
+        assert len(response.json()["openTickers"]) == num_tickers
+        assert peak > 1  # sanity: fetches actually ran in parallel
+        assert peak <= MAX_FETCH_WORKERS
+
     def test_refresh_query_param_is_threaded_through_as_force_refresh(
         self, authed_client: TestClient, monkeypatch
     ) -> None:
