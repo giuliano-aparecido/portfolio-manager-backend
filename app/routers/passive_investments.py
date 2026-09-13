@@ -10,7 +10,7 @@ from app.models import PassiveInvestment
 from app.schemas.passive import PassiveInvestmentCreateRequest, PassiveInvestmentDetail, PassiveInvestmentOut, PassiveInvestmentUpdateRequest
 from app.services.passive_detail import compute_passive_investment_detail
 from app.services.validation import CURRENCIES, PASSIVE_TYPES, MIN_GAIN_LOSS_PCT, is_valid_currency, is_valid_gain_loss_pct, is_valid_passive_type
-from app.utils import to_number
+from app.utils import parse_int_id, to_number
 
 router = APIRouter(prefix="/passive-investments", tags=["passive-investments"])
 
@@ -71,10 +71,7 @@ def get_passive_investment_detail(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_authenticated_user_id),
 ) -> PassiveInvestmentDetail:
-    try:
-        parsed_id = int(investment_id)
-    except ValueError:
-        raise AppError(400, "invalid id") from None
+    parsed_id = parse_int_id(investment_id)
 
     detail = compute_passive_investment_detail(db, parsed_id, user_id)
     if detail is None:
@@ -89,10 +86,7 @@ def update_passive_investment(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_authenticated_user_id),
 ) -> PassiveInvestment:
-    try:
-        parsed_id = int(investment_id)
-    except ValueError:
-        raise AppError(400, "invalid id") from None
+    parsed_id = parse_int_id(investment_id)
 
     existing = db.query(PassiveInvestment).filter(PassiveInvestment.id == parsed_id, PassiveInvestment.user_id == user_id).first()
     if existing is None:
@@ -129,10 +123,7 @@ def delete_passive_investment(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_authenticated_user_id),
 ) -> dict:
-    try:
-        parsed_id = int(investment_id)
-    except ValueError:
-        raise AppError(400, "invalid id") from None
+    parsed_id = parse_int_id(investment_id)
 
     existing = db.query(PassiveInvestment).filter(PassiveInvestment.id == parsed_id, PassiveInvestment.user_id == user_id).first()
     if existing is None:

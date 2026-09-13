@@ -8,16 +8,9 @@ from app.exceptions import AppError, NotFoundError
 from app.models import PassiveInvestment, PassiveRecurringDeposit
 from app.schemas.passive import RecurringDepositCreateRequest, RecurringDepositOut, RecurringDepositUpdateRequest
 from app.services.validation import RECURRING_FREQUENCIES, is_valid_recurring_frequency
-from app.utils import parse_date, to_number
+from app.utils import parse_date, parse_int_id, to_number
 
 router = APIRouter(prefix="/passive-investments/{investment_id}/recurring-deposit", tags=["passive-recurring-deposit"])
-
-
-def _parse_investment_id(investment_id: str) -> int:
-    try:
-        return int(investment_id)
-    except ValueError:
-        raise AppError(400, "invalid id") from None
 
 
 def _parse_and_validate(body) -> dict:
@@ -60,7 +53,7 @@ def create_recurring_deposit(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_authenticated_user_id),
 ) -> PassiveRecurringDeposit:
-    inv_id = _parse_investment_id(investment_id)
+    inv_id = parse_int_id(investment_id)
     _get_owned_investment(db, inv_id, user_id)
 
     existing_rule = db.query(PassiveRecurringDeposit).filter(PassiveRecurringDeposit.passive_investment_id == inv_id).first()
@@ -88,7 +81,7 @@ def update_recurring_deposit(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_authenticated_user_id),
 ) -> PassiveRecurringDeposit:
-    inv_id = _parse_investment_id(investment_id)
+    inv_id = parse_int_id(investment_id)
     _get_owned_investment(db, inv_id, user_id)
 
     existing_rule = db.query(PassiveRecurringDeposit).filter(PassiveRecurringDeposit.passive_investment_id == inv_id).first()
@@ -115,7 +108,7 @@ def delete_recurring_deposit(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_authenticated_user_id),
 ) -> dict:
-    inv_id = _parse_investment_id(investment_id)
+    inv_id = parse_int_id(investment_id)
     _get_owned_investment(db, inv_id, user_id)
 
     existing_rule = db.query(PassiveRecurringDeposit).filter(PassiveRecurringDeposit.passive_investment_id == inv_id).first()

@@ -9,16 +9,9 @@ from app.schemas.passive import PassiveTransactionCreateRequest, PassiveTransact
 from app.services.ledger import PassiveLedgerTxn, validate_cash_ledger_integrity
 from app.services.locking import lock_passive_investment
 from app.services.validation import PASSIVE_TXN_TYPES, is_valid_passive_txn_type
-from app.utils import parse_date, to_number
+from app.utils import parse_date, parse_int_id, to_number
 
 router = APIRouter(prefix="/passive-investments/{investment_id}/transactions", tags=["passive-transactions"])
-
-
-def _parse_investment_id(investment_id: str) -> int:
-    try:
-        return int(investment_id)
-    except ValueError:
-        raise AppError(400, "invalid id") from None
 
 
 def _to_ledger_txn(t: PassiveTransaction) -> PassiveLedgerTxn:
@@ -32,7 +25,7 @@ def create_passive_transaction(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_authenticated_user_id),
 ) -> PassiveTransaction:
-    inv_id = _parse_investment_id(investment_id)
+    inv_id = parse_int_id(investment_id)
     investment = db.query(PassiveInvestment).filter(PassiveInvestment.id == inv_id, PassiveInvestment.user_id == user_id).first()
     if investment is None:
         raise NotFoundError("Passive investment not found")
@@ -67,10 +60,7 @@ def create_passive_transaction(
 
 
 def _get_owned_transaction(db: Session, investment_id: int, txn_id_str: str, user_id: str) -> PassiveTransaction:
-    try:
-        txn_id = int(txn_id_str)
-    except ValueError:
-        raise AppError(400, "invalid id") from None
+    txn_id = parse_int_id(txn_id_str)
     existing = (
         db.query(PassiveTransaction)
         .join(PassiveInvestment)
@@ -94,7 +84,7 @@ def update_passive_transaction(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_authenticated_user_id),
 ) -> PassiveTransaction:
-    inv_id = _parse_investment_id(investment_id)
+    inv_id = parse_int_id(investment_id)
     existing_txn = _get_owned_transaction(db, inv_id, txn_id, user_id)
 
     txn_type = (body.type or "").strip().upper()
@@ -136,7 +126,7 @@ def delete_passive_transaction(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_authenticated_user_id),
 ) -> dict:
-    inv_id = _parse_investment_id(investment_id)
+    inv_id = parse_int_id(investment_id)
     existing_txn = _get_owned_transaction(db, inv_id, txn_id, user_id)
 
     lock_passive_investment(db, inv_id)

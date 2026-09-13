@@ -12,7 +12,7 @@ from app.services.mappers import portfolio_transaction_to_processed
 from app.services.mutation_validation import validate_fifo_integrity
 from app.services.price_service import fetch_historical_fx_rate
 from app.services.validation import TRANSACTION_TYPES, is_valid_transaction_type
-from app.utils import parse_date, to_number
+from app.utils import parse_date, parse_int_id, to_number
 
 router = APIRouter(prefix="/portfolio/transactions", tags=["portfolio-transactions"])
 
@@ -124,10 +124,7 @@ def create_transaction(
 
 
 def _get_owned_transaction(db: Session, txn_id_str: str, user_id: str) -> PortfolioTransaction:
-    try:
-        txn_id = int(txn_id_str)
-    except ValueError:
-        raise AppError(400, "Invalid transaction id") from None
+    txn_id = parse_int_id(txn_id_str, "Invalid transaction id")
     existing = db.query(PortfolioTransaction).filter(PortfolioTransaction.id == txn_id).first()
     if existing is None or existing.user_id != user_id:
         raise NotFoundError("Transaction not found")

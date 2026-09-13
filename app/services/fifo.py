@@ -15,7 +15,7 @@ class Lot:
     cost_per_share: float  # native currency
     date: datetime
     fx_rate_to_chf: float  # captured at purchase time, immutable
-    is_from_drip: bool = False
+    is_from_drip: bool = False  # currently unused/reserved - nothing in this repo reads it
 
 
 @dataclass
