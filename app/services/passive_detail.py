@@ -23,7 +23,7 @@ def compute_passive_investment_detail(db: Session, investment_id: int, user_id: 
     txns = (
         db.query(PassiveTransaction)
         .filter(PassiveTransaction.passive_investment_id == investment_id)
-        .order_by(PassiveTransaction.date.asc())
+        .order_by(PassiveTransaction.date.asc(), PassiveTransaction.id.asc())
         .all()
     )
     rule = (

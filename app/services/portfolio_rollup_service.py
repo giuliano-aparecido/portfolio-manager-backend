@@ -17,7 +17,7 @@ from app.services.ticker_config import derive_yahoo_ticker
 
 
 def compute_portfolio_rollup(db: Session, user_id: str | None = None, *, force_refresh: bool = False) -> PortfolioRollup:
-    txn_query = db.query(PortfolioTransaction).order_by(PortfolioTransaction.date.asc())
+    txn_query = db.query(PortfolioTransaction).order_by(PortfolioTransaction.date.asc(), PortfolioTransaction.id.asc())
     metadata_query = db.query(TickerMetadata)
     if user_id:
         txn_query = txn_query.filter(PortfolioTransaction.user_id == user_id)

@@ -88,9 +88,12 @@ def create_transaction(
     # validate fine against the same stale snapshot and jointly oversell.
     lock_portfolio_ticker(db, user_id, ticker)
 
-    existing = db.query(PortfolioTransaction).filter(
-        PortfolioTransaction.ticker == ticker, PortfolioTransaction.user_id == user_id
-    ).all()
+    existing = (
+        db.query(PortfolioTransaction)
+        .filter(PortfolioTransaction.ticker == ticker, PortfolioTransaction.user_id == user_id)
+        .order_by(PortfolioTransaction.date.asc(), PortfolioTransaction.id.asc())
+        .all()
+    )
     candidate = ProcessedTransaction(
         ticker=ticker,
         date=date,
@@ -100,6 +103,7 @@ def create_transaction(
         quantity=quantity,
         price_per_share=price_per_share,
         cash_amount=cash_amount,
+        id=None,
     )
     validation = validate_fifo_integrity([portfolio_transaction_to_processed(t) for t in existing] + [candidate])
     if not validation["valid"]:
@@ -165,9 +169,16 @@ def update_transaction(
 
     lock_portfolio_ticker(db, user_id, ticker)
 
-    others = db.query(PortfolioTransaction).filter(
-        PortfolioTransaction.ticker == ticker, PortfolioTransaction.user_id == user_id, PortfolioTransaction.id != existing_txn.id
-    ).all()
+    others = (
+        db.query(PortfolioTransaction)
+        .filter(
+            PortfolioTransaction.ticker == ticker,
+            PortfolioTransaction.user_id == user_id,
+            PortfolioTransaction.id != existing_txn.id,
+        )
+        .order_by(PortfolioTransaction.date.asc(), PortfolioTransaction.id.asc())
+        .all()
+    )
     candidate = ProcessedTransaction(
         ticker=ticker,
         date=date,
@@ -177,6 +188,7 @@ def update_transaction(
         quantity=quantity,
         price_per_share=price_per_share,
         cash_amount=cash_amount,
+        id=existing_txn.id,
     )
     validation = validate_fifo_integrity([portfolio_transaction_to_processed(t) for t in others] + [candidate])
     if not validation["valid"]:
@@ -204,11 +216,16 @@ def delete_transaction(
 
     lock_portfolio_ticker(db, user_id, existing_txn.ticker)
 
-    remaining = db.query(PortfolioTransaction).filter(
-        PortfolioTransaction.ticker == existing_txn.ticker,
-        PortfolioTransaction.user_id == user_id,
-        PortfolioTransaction.id != existing_txn.id,
-    ).all()
+    remaining = (
+        db.query(PortfolioTransaction)
+        .filter(
+            PortfolioTransaction.ticker == existing_txn.ticker,
+            PortfolioTransaction.user_id == user_id,
+            PortfolioTransaction.id != existing_txn.id,
+        )
+        .order_by(PortfolioTransaction.date.asc(), PortfolioTransaction.id.asc())
+        .all()
+    )
     validation = validate_fifo_integrity([portfolio_transaction_to_processed(t) for t in remaining])
     if not validation["valid"]:
         raise AppError(400, f"Cannot delete: {validation['error']}")

@@ -11,6 +11,7 @@ def txn(
     price_per_share: float | None = None,
     fx_rate_to_chf: float = 1.0,
     ticker: str = "AAPL",
+    id: int | None = None,
 ) -> ProcessedTransaction:
     return ProcessedTransaction(
         ticker=ticker,
@@ -20,6 +21,7 @@ def txn(
         fx_rate_to_chf=fx_rate_to_chf,
         quantity=quantity,
         price_per_share=price_per_share,
+        id=id,
     )
 
 
@@ -97,6 +99,30 @@ class TestSimulateWhatIfSell:
         # State reflects "before" unchanged, not a partial/garbage mutation.
         assert result.shares_after == result.shares_before == 10
         assert result.market_value_chf_after == result.market_value_chf_before
+
+
+class TestSimulateWhatIfSameDateTiebreak:
+    def test_same_date_existing_lots_resolved_by_id_regardless_of_input_order(self) -> None:
+        # Two same-date BUY lots at different prices, handed in the REVERSE
+        # of their id (insertion) order — simulating an unordered fetch.
+        # The lower-id (earlier) lot must still be consumed first.
+        expensive_lot = txn("2024-01-01", "BUY", quantity=5, price_per_share=200, id=2)
+        cheap_lot = txn("2024-01-01", "BUY", quantity=5, price_per_share=100, id=1)
+        hypothetical = WhatIfTransaction(ticker="AAPL", type="SELL", quantity=5, price_per_share=300)
+
+        result = simulate_whatif(
+            existing_transactions=[expensive_lot, cheap_lot],
+            hypothetical=hypothetical,
+            current_price_native=300,
+            fx_rate_to_chf=1.0,
+            portfolio_market_value_chf_before=3000,
+        )
+
+        assert result.error is None
+        # Selling into the cheap lot (id=1, cost 100) first: proceeds
+        # 5*300=1500, cost basis 5*100=500 -> gain 1000. If the expensive
+        # lot (id=2) were wrongly consumed first, the gain would be 500.
+        assert result.realized_gain_chf == 1000
 
 
 class TestSimulateWhatIfPortfolioAllocation:

@@ -7,7 +7,14 @@ from app.services.fifo import ProcessedTransaction, process_ticker
 
 
 def validate_fifo_integrity(transactions: list[ProcessedTransaction]) -> dict:
-    non_dividend = sorted((t for t in transactions if t.type != "DIVIDEND"), key=lambda t: t.date)
+    # Same-date ties broken by ascending `id` (a not-yet-persisted
+    # candidate, id is None, sorts last) — must match the `ORDER BY date,
+    # id` used by every read path that later displays this ticker's FIFO
+    # result, per process_ticker's docstring.
+    non_dividend = sorted(
+        (t for t in transactions if t.type != "DIVIDEND"),
+        key=lambda t: (t.date, t.id if t.id is not None else float("inf")),
+    )
     try:
         process_ticker(non_dividend)
     except ValueError as exc:

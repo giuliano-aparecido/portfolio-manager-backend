@@ -29,6 +29,11 @@ class ProcessedTransaction:
     price_per_share: float | None = None  # BUY, SELL, DRIP — native currency
     cash_amount: float | None = None  # DIVIDEND — native currency
     notes: str | None = None
+    # Primary key of the underlying row, used only as a same-date tiebreak
+    # (see process_ticker's docstring). None for a not-yet-persisted
+    # candidate transaction (e.g. the create/update mutation-validation
+    # path), which then sorts after every persisted row on the same date.
+    id: int | None = None
 
 
 @dataclass
@@ -65,7 +70,15 @@ class FIFOResult:
 
 def process_ticker(transactions: list[ProcessedTransaction]) -> FIFOResult:
     """Input transactions must already be sorted ascending by date (caller
-    responsibility).
+    responsibility), with ties on the same date broken by ascending `id`
+    (insertion order) — a not-yet-persisted candidate (`id is None`) sorts
+    after every persisted row sharing that date. Since FIFO lot order
+    directly determines cost-basis/realized-gain numbers, this tiebreak
+    must be applied identically everywhere the same underlying rows are
+    consumed or displayed (see app/services/mutation_validation.py and the
+    `ORDER BY date, id` queries in the read-path services) — otherwise two
+    same-date transactions can be FIFO-ordered one way for mutation
+    validation and a different way for display.
     """
     lots: list[Lot] = []
     realized: list[RealizedGain] = []
