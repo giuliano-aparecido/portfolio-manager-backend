@@ -111,7 +111,7 @@ def update_passive_transaction(
         .order_by(PassiveTransaction.date.asc(), PassiveTransaction.id.asc())
         .all()
     )
-    candidate = PassiveLedgerTxn(date=date, type=txn_type, amount_native=amount_native)
+    candidate = PassiveLedgerTxn(date=date, type=txn_type, amount_native=amount_native, id=existing_txn.id)
     validation = validate_cash_ledger_integrity([_to_ledger_txn(t) for t in others] + [candidate])
     if not validation["valid"]:
         raise AppError(400, validation["error"])

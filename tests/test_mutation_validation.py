@@ -61,14 +61,10 @@ def test_multiple_same_date_sells_still_resolve_by_id_when_input_is_scrambled() 
 
 
 def test_not_yet_persisted_candidate_sorts_after_existing_rows_on_same_date() -> None:
-    # The mutation-validation routes append the not-yet-persisted candidate
-    # (id=None) to the *end* of the existing list before validating. On a
-    # same-date collision, the candidate must be treated as happening after
-    # every already-persisted row for that date, not before.
     existing_buy = txn("BUY", quantity=5, price_per_share=100, id=1)
     candidate_sell = txn("SELL", quantity=5, price_per_share=150)  # id=None
 
-    # If the candidate were (wrongly) treated as coming first, this would
-    # be an oversell (no shares yet) — it must instead succeed.
-    result = validate_fifo_integrity([existing_buy, candidate_sell])
+    # Candidate passed FIRST: a date-only stable sort would keep it there
+    # and reject this as an oversell; the id tiebreak must move it last.
+    result = validate_fifo_integrity([candidate_sell, existing_buy])
     assert result["valid"] is True

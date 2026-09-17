@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
-from app.services.fifo import ProcessedTransaction, TOLERANCE, process_ticker
+from app.services.fifo import ProcessedTransaction, TOLERANCE, chronological_key, process_ticker
 
 
 @dataclass
@@ -51,18 +51,15 @@ def simulate_whatif(
 ) -> WhatIfImpact:
     """`existing_transactions` need not be pre-sorted; this function sorts
     them (fifo.process_ticker requires ascending order, unlike its other
-    callers which rely on the caller's DB query ordering). Same-date ties
-    are broken by ascending `id`, matching process_ticker's documented
-    tiebreak — the hypothetical trade itself has no `id` and so always
-    sorts last among any transactions sharing "now" as its date.
+    callers which rely on the caller's DB query ordering). The hypothetical
+    trade is appended after all existing transactions regardless of their
+    dates — it is not sorted in.
 
     Ignores where BUY cash comes from / where SELL proceeds go — this
     simulates the position and portfolio-percentage impact of one trade in
     isolation, not a full cash-flow-balanced rebalancing plan.
     """
-    sorted_existing = sorted(
-        existing_transactions, key=lambda t: (t.date, t.id if t.id is not None else float("inf"))
-    )
+    sorted_existing = sorted(existing_transactions, key=chronological_key)
 
     before = process_ticker(sorted_existing)
     shares_before = before.current_shares

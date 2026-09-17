@@ -75,14 +75,11 @@ class TestValidateCashLedgerIntegrity:
         assert result["valid"] is True
 
     def test_not_yet_persisted_candidate_sorts_after_existing_rows_on_same_date(self) -> None:
-        # The mutation-validation routes append the not-yet-persisted
-        # candidate (id=None) to the end of the existing list before
-        # validating. On a same-date collision, the candidate must be
-        # treated as happening after every already-persisted row for that
-        # date, not before.
         existing_deposit = txn("2024-01-01", "DEPOSIT", 500, id=1)
         candidate_withdrawal = txn("2024-01-01", "WITHDRAWAL", 500)  # id=None
 
-        result = validate_cash_ledger_integrity([existing_deposit, candidate_withdrawal])
+        # Candidate passed FIRST: a date-only stable sort would keep it there
+        # and go negative; the id tiebreak must move it last.
+        result = validate_cash_ledger_integrity([candidate_withdrawal, existing_deposit])
 
         assert result["valid"] is True
