@@ -29,6 +29,13 @@ class ProcessedTransaction:
     price_per_share: float | None = None  # BUY, SELL, DRIP — native currency
     cash_amount: float | None = None  # DIVIDEND — native currency
     notes: str | None = None
+    id: int | None = None
+
+
+def chronological_key(t) -> tuple[datetime, float]:
+    """Sort key giving the same order as the read paths' `ORDER BY date, id`;
+    an unsaved row (`id is None`) sorts after saved rows on the same date."""
+    return (t.date, t.id if t.id is not None else float("inf"))
 
 
 @dataclass
@@ -64,8 +71,10 @@ class FIFOResult:
 
 
 def process_ticker(transactions: list[ProcessedTransaction]) -> FIFOResult:
-    """Input transactions must already be sorted ascending by date (caller
-    responsibility).
+    """Input must already be in `chronological_key` order (caller
+    responsibility). FIFO lot order determines cost basis and realized
+    gains, so validation and display must sort the same rows identically
+    or they disagree on the numbers.
     """
     lots: list[Lot] = []
     realized: list[RealizedGain] = []

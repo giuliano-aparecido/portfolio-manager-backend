@@ -129,6 +129,30 @@ class TestUpdateAndDeleteTransaction:
         assert body["quantity"] == 15
         assert body["fxRateToCHF"] == 0.95
 
+    def test_update_validates_the_edited_row_at_its_own_position_among_same_date_rows(
+        self, authed_client: TestClient, db_session: Session, test_user: User, monkeypatch
+    ) -> None:
+        register_ticker(db_session, test_user)
+        buy = self._create_buy(db_session, test_user, quantity=5, date_str="2024-01-01")
+        db_session.add(
+            PortfolioTransaction(
+                user_id=test_user.id, ticker="AAPL", date=buy.date, type="SELL", native_currency="USD",
+                quantity=5, price_per_share=120, fx_rate_to_chf=0.9,
+            )
+        )
+        db_session.flush()
+        monkeypatch.setattr("app.routers.portfolio_transactions.fetch_historical_fx_rate", lambda ccy, date: 0.9)
+
+        # Editing the BUY's price must keep it BEFORE the same-date SELL
+        # (its id is lower); if the candidate were treated as unsaved it
+        # would sort after the SELL and be rejected as an oversell.
+        response = authed_client.put(
+            f"/portfolio/transactions/{buy.id}",
+            json={"type": "BUY", "date": "2024-01-01", "quantity": 5, "pricePerShare": 101},
+        )
+        assert response.status_code == 200, response.json()
+        assert response.json()["pricePerShare"] == 101
+
     def test_delete_blocks_when_a_later_sell_depends_on_it(self, authed_client: TestClient, db_session: Session, test_user: User) -> None:
         register_ticker(db_session, test_user)
         buy = self._create_buy(db_session, test_user, quantity=10)

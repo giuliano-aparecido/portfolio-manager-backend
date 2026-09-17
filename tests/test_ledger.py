@@ -3,8 +3,10 @@ from datetime import datetime, timezone
 from app.services.ledger import PassiveLedgerTxn, compute_net_balance, validate_cash_ledger_integrity
 
 
-def txn(date_str: str, type_: str, amount_native: float) -> PassiveLedgerTxn:
-    return PassiveLedgerTxn(date=datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc), type=type_, amount_native=amount_native)
+def txn(date_str: str, type_: str, amount_native: float, id: int | None = None) -> PassiveLedgerTxn:
+    return PassiveLedgerTxn(
+        date=datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc), type=type_, amount_native=amount_native, id=id
+    )
 
 
 class TestComputeNetBalance:
@@ -55,3 +57,29 @@ class TestValidateCashLedgerIntegrity:
             [txn("2024-03-01", "DEPOSIT", 500), txn("2024-01-01", "WITHDRAWAL", 100)]
         )
         assert result["valid"] is False
+
+    def test_same_date_ties_broken_by_ascending_id_regardless_of_input_order(self) -> None:
+        # A DEPOSIT (id=1) and a same-day WITHDRAWAL of that exact amount
+        # (id=2) — chronologically the DEPOSIT must be applied first.
+        # Passed in the REVERSE of id order here, simulating an unordered
+        # DB fetch that happened to return the WITHDRAWAL row before the
+        # DEPOSIT row. Before this fix, validate_cash_ledger_integrity only
+        # sorted by date, so a same-date tie kept whatever order the caller
+        # handed it — this would have applied the WITHDRAWAL first and
+        # dipped the balance negative.
+        withdrawal = txn("2024-01-01", "WITHDRAWAL", 500, id=2)
+        deposit = txn("2024-01-01", "DEPOSIT", 500, id=1)
+
+        result = validate_cash_ledger_integrity([withdrawal, deposit])
+
+        assert result["valid"] is True
+
+    def test_not_yet_persisted_candidate_sorts_after_existing_rows_on_same_date(self) -> None:
+        existing_deposit = txn("2024-01-01", "DEPOSIT", 500, id=1)
+        candidate_withdrawal = txn("2024-01-01", "WITHDRAWAL", 500)  # id=None
+
+        # Candidate passed FIRST: a date-only stable sort would keep it there
+        # and go negative; the id tiebreak must move it last.
+        result = validate_cash_ledger_integrity([candidate_withdrawal, existing_deposit])
+
+        assert result["valid"] is True

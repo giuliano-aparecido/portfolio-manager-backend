@@ -81,7 +81,7 @@ def _load_existing_transactions(db: Session, ticker: str, user_id: str) -> list[
     txns = (
         db.query(PortfolioTransaction)
         .filter(PortfolioTransaction.ticker == ticker, PortfolioTransaction.user_id == user_id)
-        .order_by(PortfolioTransaction.date.asc())
+        .order_by(PortfolioTransaction.date.asc(), PortfolioTransaction.id.asc())
         .all()
     )
     return [portfolio_transaction_to_processed(t) for t in txns if t.type != "DIVIDEND"]

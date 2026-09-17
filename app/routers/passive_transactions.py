@@ -15,7 +15,7 @@ router = APIRouter(prefix="/passive-investments/{investment_id}/transactions", t
 
 
 def _to_ledger_txn(t: PassiveTransaction) -> PassiveLedgerTxn:
-    return PassiveLedgerTxn(date=t.date, type=t.type, amount_native=t.amount_native)
+    return PassiveLedgerTxn(date=t.date, type=t.type, amount_native=t.amount_native, id=t.id)
 
 
 @router.post("", response_model=PassiveTransactionOut, status_code=201)
@@ -46,7 +46,12 @@ def create_passive_transaction(
     # then validates against its committed write instead of a stale snapshot.
     lock_passive_investment(db, inv_id)
 
-    existing_txns = db.query(PassiveTransaction).filter(PassiveTransaction.passive_investment_id == inv_id).all()
+    existing_txns = (
+        db.query(PassiveTransaction)
+        .filter(PassiveTransaction.passive_investment_id == inv_id)
+        .order_by(PassiveTransaction.date.asc(), PassiveTransaction.id.asc())
+        .all()
+    )
     candidate = PassiveLedgerTxn(date=date, type=txn_type, amount_native=amount_native)
     validation = validate_cash_ledger_integrity([_to_ledger_txn(t) for t in existing_txns] + [candidate])
     if not validation["valid"]:
@@ -103,9 +108,10 @@ def update_passive_transaction(
     others = (
         db.query(PassiveTransaction)
         .filter(PassiveTransaction.passive_investment_id == inv_id, PassiveTransaction.id != existing_txn.id)
+        .order_by(PassiveTransaction.date.asc(), PassiveTransaction.id.asc())
         .all()
     )
-    candidate = PassiveLedgerTxn(date=date, type=txn_type, amount_native=amount_native)
+    candidate = PassiveLedgerTxn(date=date, type=txn_type, amount_native=amount_native, id=existing_txn.id)
     validation = validate_cash_ledger_integrity([_to_ledger_txn(t) for t in others] + [candidate])
     if not validation["valid"]:
         raise AppError(400, validation["error"])
@@ -134,6 +140,7 @@ def delete_passive_transaction(
     remaining = (
         db.query(PassiveTransaction)
         .filter(PassiveTransaction.passive_investment_id == inv_id, PassiveTransaction.id != existing_txn.id)
+        .order_by(PassiveTransaction.date.asc(), PassiveTransaction.id.asc())
         .all()
     )
     validation = validate_cash_ledger_integrity([_to_ledger_txn(t) for t in remaining])

@@ -61,3 +61,24 @@ class TestUpdateAndDeletePassiveTransaction:
         )
         assert response.status_code == 200
         assert response.json()["amountNative"] == 200
+
+    def test_update_validates_the_edited_row_at_its_own_position_among_same_date_rows(
+        self, authed_client: TestClient, db_session: Session, test_user: User
+    ) -> None:
+        inv = make_investment(db_session, test_user)
+        same_day = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        first = PassiveTransaction(passive_investment_id=inv.id, type="DEPOSIT", date=same_day, amount_native=100)
+        db_session.add(first)
+        db_session.flush()
+        db_session.add(PassiveTransaction(passive_investment_id=inv.id, type="DEPOSIT", date=same_day, amount_native=500))
+        db_session.flush()
+
+        # Turning the FIRST same-day row into a 300 withdrawal goes negative
+        # at its real position (before the 500 deposit). If the candidate
+        # were treated as unsaved it would sort last and wrongly pass.
+        response = authed_client.put(
+            f"/passive-investments/{inv.id}/transactions/{first.id}",
+            json={"type": "WITHDRAWAL", "date": "2024-01-01", "amountNative": 300},
+        )
+        assert response.status_code == 400
+        assert "negative" in response.json()["error"]

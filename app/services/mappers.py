@@ -18,4 +18,5 @@ def portfolio_transaction_to_processed(t: PortfolioTransaction) -> ProcessedTran
         price_per_share=t.price_per_share,
         cash_amount=t.cash_amount,
         notes=t.notes,
+        id=t.id,
     )

@@ -5,12 +5,15 @@ lib/passive/ledger.ts.
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.services.fifo import chronological_key
+
 
 @dataclass
 class PassiveLedgerTxn:
     date: datetime
     type: str  # "DEPOSIT" | "WITHDRAWAL"
     amount_native: float
+    id: int | None = None
 
 
 def compute_net_balance(transactions: list[PassiveLedgerTxn]) -> float:
@@ -21,12 +24,12 @@ def compute_net_balance(transactions: list[PassiveLedgerTxn]) -> float:
 
 
 def validate_cash_ledger_integrity(transactions: list[PassiveLedgerTxn]) -> dict:
-    """Order-sensitive — a running balance sorted by date must never dip
-    negative, even if the final net balance would be non-negative under a
-    different ordering. Rejects a mutation up front rather than silently
-    accepting bad data.
+    """Order-sensitive — a running balance in `chronological_key` order
+    must never dip negative, even if the final net balance would be
+    non-negative under a different ordering. Rejects a mutation up front
+    rather than silently accepting bad data.
     """
-    sorted_txns = sorted(transactions, key=lambda t: t.date)
+    sorted_txns = sorted(transactions, key=chronological_key)
     balance = 0.0
     for t in sorted_txns:
         balance += t.amount_native if t.type == "DEPOSIT" else -t.amount_native

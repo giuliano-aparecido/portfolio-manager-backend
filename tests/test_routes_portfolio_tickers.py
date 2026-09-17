@@ -8,6 +8,7 @@ from app.dependencies.auth import get_authenticated_user_id
 from app.exceptions import UnauthorizedError
 from app.main import app
 from app.models import PortfolioTransaction, TickerMetadata, User
+from app.services.price_service import PriceQuote
 
 
 @pytest.fixture
@@ -121,6 +122,62 @@ class TestGetTickerDetail:
         assert body["currentShares"] == 0
         assert body["marketValueNative"] is None  # closed position — no live price attempted
         assert body["totalRealizedGainNative"] == 200  # (120-100)*10
+
+    def test_same_date_lots_are_fifo_consumed_and_displayed_in_ascending_id_order(
+        self, authed_client: TestClient, db_session: Session, test_user: User, monkeypatch
+    ) -> None:
+        """Regression test for the fixed non-deterministic same-date
+        tiebreak (see fifo.py's docstring): two BUY lots sharing the exact
+        same date must be FIFO-consumed in ascending-id (insertion) order,
+        and the displayed transaction list must show that same order —
+        not whatever order Postgres happens to return rows in.
+        """
+        db_session.add(TickerMetadata(user_id=test_user.id, ticker="AAPL", market="NASDAQ", category="Stock", native_currency="USD"))
+        same_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+        cheap_lot = PortfolioTransaction(
+            user_id=test_user.id, ticker="AAPL", date=same_date, type="BUY",
+            native_currency="USD", quantity=5, price_per_share=100, fx_rate_to_chf=1.0,
+        )
+        db_session.add(cheap_lot)
+        db_session.flush()  # assigns the lower id — inserted (and "happened") first
+
+        expensive_lot = PortfolioTransaction(
+            user_id=test_user.id, ticker="AAPL", date=same_date, type="BUY",
+            native_currency="USD", quantity=5, price_per_share=200, fx_rate_to_chf=1.0,
+        )
+        db_session.add(expensive_lot)
+        db_session.flush()
+
+        partial_sell = PortfolioTransaction(
+            user_id=test_user.id, ticker="AAPL", date=same_date, type="SELL",
+            native_currency="USD", quantity=5, price_per_share=300, fx_rate_to_chf=1.0,
+        )
+        db_session.add(partial_sell)
+        db_session.flush()
+
+        monkeypatch.setattr(
+            "app.services.ticker_detail.fetch_current_price",
+            lambda yahoo_ticker: PriceQuote(
+                price=300.0, currency="USD", timestamp=datetime.now(timezone.utc), source="yahoo",
+                daily_change_percent=0.0, daily_change=0.0,
+            ),
+        )
+        monkeypatch.setattr("app.services.ticker_detail.fetch_fx_rate_to_chf", lambda ccy: 1.0)
+
+        response = authed_client.get("/portfolio/tickers/AAPL")
+        assert response.status_code == 200
+        body = response.json()
+
+        # FIFO must have consumed the cheaper, earlier-inserted lot (id of
+        # cheap_lot) first: gain = (300-100)*5 = 1000, not (300-200)*5 = 500
+        # (which is what consuming the expensive lot first would produce).
+        assert body["totalRealizedGainNative"] == 1000
+
+        # The displayed transaction order matches insertion (id) order —
+        # the same order FIFO validation used — not an independent one.
+        displayed_ids = [t["id"] for t in body["transactions"]]
+        assert displayed_ids == [cheap_lot.id, expensive_lot.id, partial_sell.id]
 
     def test_does_not_leak_another_users_ticker_data(
         self, authed_client: TestClient, db_session: Session

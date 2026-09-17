@@ -24,7 +24,7 @@ def compute_ticker_detail(db: Session, ticker: str, user_id: str) -> TickerDetai
     txns = (
         db.query(PortfolioTransaction)
         .filter(PortfolioTransaction.ticker == ticker, PortfolioTransaction.user_id == user_id)
-        .order_by(PortfolioTransaction.date.asc())
+        .order_by(PortfolioTransaction.date.asc(), PortfolioTransaction.id.asc())
         .all()
     )
 
