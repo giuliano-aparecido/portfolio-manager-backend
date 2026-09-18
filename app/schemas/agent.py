@@ -3,6 +3,15 @@ from typing import Literal
 from app.schemas.common import CamelModel
 from app.schemas.portfolio import TickerPriceError
 
+# One definition of the news status values, shared with the service that
+# produces them (app/services/news.py imports this). Defined here rather
+# than there so the dependency points the way every other module in this
+# app already points — services import schemas, not the reverse.
+# "ok" — items present. "no_news" — every window came back empty or
+# all-junk, an honest answer rather than a failure. "error" — the fetch
+# itself failed.
+NewsStatus = Literal["ok", "no_news", "error"]
+
 # --- Allocation -------------------------------------------------------------
 
 
@@ -183,3 +192,38 @@ class PortfolioFundamentals(CamelModel):
     uncovered_tickers: list[str]
     price_errors: list[TickerPriceError]
     notes: list[str]
+
+
+# --- Ticker news --------------------------------------------------------
+
+
+class NewsItem(CamelModel):
+    """One headline. `link` is Google News' redirect URL for the article,
+    not the publisher's canonical URL — good enough to open, not something
+    to scrape."""
+
+    title: str
+    publisher: str
+    published_date: str | None = None
+    link: str
+
+
+class TickerNews(CamelModel):
+    """Recent headlines for one holding. `status` is "ok" (items present),
+    "no_news" (nothing meaningful found even in the widest window — an
+    honest answer, not a failure) or "error" (the news feed couldn't be
+    reached).
+
+    `window_days` is how far back the returned items actually came from:
+    the search starts at a week and widens only when nothing meaningful
+    turns up, so a large value means the news is old, not that more of it
+    was wanted. It's None when there are no items.
+    """
+
+    ticker: str
+    company_name: str | None = None
+    sector: str | None = None
+    window_days: int | None = None
+    status: NewsStatus
+    message: str | None = None
+    items: list[NewsItem] = []

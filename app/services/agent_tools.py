@@ -17,6 +17,7 @@ returned here comes from the same deterministic services the rest of the
 app uses (FIFO, live pricing, rollups).
 """
 
+import asyncio
 import math
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -41,6 +42,7 @@ from app.services.fundamentals.service import (
     ticker_intrinsic_value,
 )
 from app.services.mappers import portfolio_transaction_to_processed
+from app.services.news_service import ticker_news
 from app.services.passive_rollup_service import compute_passive_rollup
 from app.services.portfolio_rollup_service import compute_portfolio_rollup
 from app.services.price_service import fetch_current_price, fetch_fx_rate_to_chf
@@ -183,6 +185,32 @@ def register_tools(mcp: MCPServer) -> None:
         """
         with _tool_context() as (user_id, db):
             return ticker_intrinsic_value(db, ticker, user_id)
+
+    @mcp.tool()
+    async def get_ticker_news(ticker: str, limit: int = 5) -> dict:
+        """Get recent news headlines about one holding's company, filtered
+        down to meaningful coverage — auto-generated 13F-filing spam,
+        "here's why the stock moved" pieces and listicle bait are removed
+        rather than returned. Call this for "what's going on with X / any
+        news on X / why has X been in the headlines" style questions, and
+        alongside the fundamentals tools when a valuation question needs
+        recent context. The search starts at the past week and widens only
+        if nothing meaningful turns up, so check `windowDays` before
+        calling anything "recent": a value of 90 or 365 means the company
+        has genuinely been quiet. `status` is "no_news" when even the
+        widest window found nothing. Returns headlines only, not article
+        text — never treat a headline as a verified fact or derive a
+        number from it.
+        """
+        # The one tool that doesn't use _tool_context(): its work is long
+        # (a fundamentals lookup plus up to one RSS fetch per search
+        # window) so it runs off the event loop, and a session opened out
+        # here would then be closed by _tool_context's `finally` on the
+        # loop while the worker thread was still using it — cancelling the
+        # awaiting task does not stop that thread. The worker owns its own
+        # session instead; see news_service's module docstring.
+        user_id = resolve_user_id()
+        return await asyncio.to_thread(ticker_news, _get_session, ticker, user_id, limit)
 
     @mcp.tool()
     async def compute_whatif(
