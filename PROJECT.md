@@ -170,11 +170,14 @@ yfinance-backed tools as everything else here.
 
 ## Portfolio assistant agent + MCP server
 
-`POST /agent/ask` is a chat endpoint: an LLM (Claude, via
-`app/services/llm/claude_provider.py`) reasons over the user's question and
-decides which read-only tools to call — it never computes a financial
-figure itself, only the app's existing deterministic services do
-(FIFO, live pricing, rollups). The response streams back as
+`POST /agent/ask` is a general-purpose chat endpoint, not restricted to
+portfolio questions (that restriction was deliberately dropped on
+2026-09-18 — see `SYSTEM_PROMPT` in `app/routers/agent.py`) — it also
+happens to have tools for the user's real portfolio, and an LLM (Claude,
+via `app/services/llm/claude_provider.py`) decides when a question
+actually calls for one of those. When it does, the model never computes a
+financial figure itself — only the app's existing deterministic services
+do (FIFO, live pricing, rollups). The response streams back as
 Server-Sent Events (`token`/`tool_call`/`tool_result`/`done`/`error`
 frames); the frontend resends the whole conversation each turn, so nothing
 is persisted server-side.
