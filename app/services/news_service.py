@@ -73,10 +73,6 @@ def ticker_news(session_factory: Callable[[], Session], ticker: str, user_id: st
             .filter(TickerMetadata.ticker == ticker, TickerMetadata.user_id == user_id)
             .first()
         )
-        # Not tracked isn't an error here (2026-09-18) — see
-        # fundamentals/service.py's ticker_fundamentals for the same
-        # reasoning. No `market` to build a Yahoo suffix from, so the bare
-        # ticker is used instead.
         yahoo_symbol = derive_yahoo_ticker(ticker, metadata.market) if metadata else ticker
         company_name, sector = _company_identity(db, yahoo_symbol)
     finally:

@@ -42,16 +42,6 @@ from app.services.fundamentals.service import (
     ticker_fundamentals,
     ticker_intrinsic_value,
 )
-# Reaches past the FundamentalsProvider abstraction (cache.py's
-# get_fundamentals() is otherwise "the only entry point the agent tools
-# use") on purpose: resolve_ticker's yf.Search is a Yahoo-specific symbol
-# LOOKUP, not a fundamentals fetch, and has no provider-agnostic
-# equivalent to call instead. Left as a direct Yahoo dependency rather
-# than adding a seam to the provider protocol for it, since there's only
-# ever been one provider — see CONTRIBUTING.md's "don't add speculative
-# abstractions ... for cases that can't occur given how a function is
-# actually called". If a second provider is ever added, this becomes the
-# one place that needs a real decision, not a silent behavioral drift.
 from app.services.fundamentals.yahoo_provider import resolve_ticker
 from app.services.mappers import portfolio_transaction_to_processed
 from app.services.news_service import ticker_news
@@ -103,14 +93,9 @@ def _load_existing_transactions(db: Session, ticker: str, user_id: str) -> list[
 
 def _guess_yahoo_symbol(ticker: str) -> str:
     """A first guess at a Yahoo symbol with no `market` to build a suffix
-    from. TICKER_CONFIGS first (covers this table's own quirks, e.g.
-    BRK.B -> BRK-B); otherwise the bare ticker, EXCEPT a dot immediately
-    followed by a known exchange suffix (MARKET_YAHOO_SUFFIX's non-US
-    values) is left alone rather than turned into a dash — the LLM is
-    free to name a non-US ticker in already-Yahoo-suffixed form (e.g.
-    "NESN.SW") now that it isn't limited to held tickers, and blindly
-    dashing that would turn a valid symbol into an invalid one before
-    _resolve_new_position_quote ever gets a chance to try it directly.
+    from: TICKER_CONFIGS first, else the bare ticker — except a ticker
+    already ending in a known exchange suffix (e.g. "NESN.SW") is left
+    alone rather than dashed into "NESN-SW".
     """
     if ticker in TICKER_CONFIGS:
         return TICKER_CONFIGS[ticker].yahoo_ticker
@@ -131,24 +116,11 @@ class _WhatIfPriceError(Exception):
 
 
 def _resolve_new_position_quote(ticker: str) -> PriceQuote:
-    """Live price for a ticker with no TickerMetadata row — a candidate
-    buy compute_whatif is evaluating, not an existing holding (2026-09-18).
-    Tries a best-guess symbol (_guess_yahoo_symbol) directly first; if that
-    doesn't resolve, falls back to yahoo_provider.resolve_ticker's
-    yf.Search — the same fallback YahooFundamentalsProvider.fetch already
-    uses for fundamentals — which catches the common case of a non-US
-    ticker needing a suffix like ".SW"/".L" the guess didn't have.
-
-    A rate limit is NOT a "ticker not found" and must not be reported as
-    one — Yahoo throttles by request volume, not per-symbol, so a 429 here
-    likely means every candidate-ticker lookup is failing right now, not
-    that this one doesn't exist. `fetch_current_price` never raises
-    FundamentalsRateLimited itself (that type belongs to the fundamentals
-    provider, not price_service.py) — only resolve_ticker's own yf.Search
-    can, on its own 429 (see its docstring). Deliberately NOT caught here:
-    it propagates out of this function so the caller can tell it apart
-    from a genuine unresolvable ticker, instead of both collapsing into
-    the same generic failure.
+    """Live price for a ticker with no TickerMetadata row. Tries a
+    best-guess symbol directly first; on failure, falls back to
+    yahoo_provider.resolve_ticker's yf.Search. A FundamentalsRateLimited
+    from that fallback is deliberately left uncaught here, so the caller
+    can distinguish it from a genuinely unresolvable ticker.
     """
     candidate = _guess_yahoo_symbol(ticker)
     try:
@@ -164,15 +136,8 @@ def _resolve_transactions_and_quote(
     db: Session, ticker: str, user_id: str, metadata: TickerMetadata | None
 ) -> tuple[list[ProcessedTransaction], PriceQuote, float]:
     """The tracked-vs-candidate branch compute_whatif needs before it can
-    call simulate_whatif, split out to keep the tool function itself at
-    the orchestration level. Raises _WhatIfPriceError, with a message
-    already worded for the caller to return as-is, for a candidate BUY
-    whose price can't be resolved. A TRACKED ticker's fetch failure is
-    deliberately NOT wrapped and propagates unchanged — matches this
-    tool's existing, tested behavior (see
-    test_a_raising_tool_yields_a_graceful_error_frame_not_a_truncated_stream
-    in tests/test_agent_route.py): only the candidate path is new here, so
-    only it gets new error handling.
+    call simulate_whatif. A tracked ticker's fetch failure propagates
+    unchanged; a candidate's is converted to _WhatIfPriceError.
     """
     if metadata is not None:
         processed = _load_existing_transactions(db, ticker, user_id)
@@ -181,19 +146,9 @@ def _resolve_transactions_and_quote(
         fx_rate = fetch_fx_rate_to_chf(metadata.native_currency)
         return processed, quote, fx_rate
 
-    # A candidate BUY, not an existing holding (2026-09-18) — no existing
-    # transactions to simulate against, and no TickerMetadata.market to
-    # resolve the Yahoo symbol from, so a best-guess candidate is resolved
-    # instead. `quote.currency` (not a stored native_currency) is the FX
-    # basis, since there's no metadata row to carry one.
     try:
         quote = _resolve_new_position_quote(ticker)
     except FundamentalsRateLimited:
-        # Not "not found" - Yahoo throttles by request volume, not
-        # per-symbol, so this almost certainly means every candidate-
-        # ticker lookup is failing right now, not that this one doesn't
-        # exist. Reporting it as a typo would be actively misleading on
-        # an investing question.
         raise _WhatIfPriceError("Price data is temporarily rate-limited upstream — try again shortly.") from None
     except Exception:
         raise _WhatIfPriceError(f"Could not find live price data for {ticker}.") from None

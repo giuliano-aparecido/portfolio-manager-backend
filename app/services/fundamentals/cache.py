@@ -1,9 +1,7 @@
 """get_fundamentals(): the only entry point the agent tools use for a
-FUNDAMENTALS fetch. One narrow, deliberate exception (2026-09-18):
-agent_tools.py's _resolve_new_position_quote calls
-yahoo_provider.resolve_ticker directly for a candidate ticker's Yahoo
-SYMBOL lookup, which isn't a fundamentals fetch and has no
-provider-agnostic equivalent — see that call site's own comment.
+fundamentals fetch (agent_tools.py separately calls
+yahoo_provider.resolve_ticker directly for a plain symbol lookup, which
+isn't a fetch).
 
 Guarantees:
 - At most one upstream request per (provider, symbol) per UTC day. After
