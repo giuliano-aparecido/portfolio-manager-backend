@@ -1,4 +1,7 @@
-"""get_fundamentals(): the only entry point the agent tools use.
+"""get_fundamentals(): the only entry point the agent tools use for a
+fundamentals fetch (agent_tools.py separately calls
+yahoo_provider.resolve_ticker directly for a plain symbol lookup, which
+isn't a fetch).
 
 Guarantees:
 - At most one upstream request per (provider, symbol) per UTC day. After

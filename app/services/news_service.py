@@ -30,7 +30,7 @@ from collections.abc import Callable
 from sqlalchemy.orm import Session
 
 from app.models import TickerMetadata
-from app.schemas.agent import NewsItem, TickerNews, TickerNotFound
+from app.schemas.agent import NewsItem, TickerNews
 from app.services.fundamentals.cache import get_fundamentals
 from app.services.news import fetch_ticker_news
 from app.services.ticker_config import derive_yahoo_ticker
@@ -38,23 +38,23 @@ from app.services.ticker_config import derive_yahoo_ticker
 logger = logging.getLogger(__name__)
 
 
-def _company_identity(db: Session, ticker: str, market: str) -> tuple[str | None, str | None]:
+def _company_identity(db: Session, yahoo_symbol: str) -> tuple[str | None, str | None]:
     """(company_name, sector) from the daily fundamentals cache, for the
     news query and the relevance filter. Both are None for a security with
-    no fundamentals at all (an ETF, a gold tracker, crypto), which is not
-    an error here — the search just falls back to the bare ticker and the
-    sector keyword tier of the relevance filter goes unused.
+    no fundamentals at all (an ETF, a gold tracker, crypto, or a ticker not
+    resolvable at all), which is not an error here — the search just falls
+    back to the bare ticker and the sector keyword tier of the relevance
+    filter goes unused.
 
     A fundamentals fetch failure is swallowed for the same reason: news is
     still worth returning on a ticker-only query, and failing the whole
     tool because an unrelated upstream is rate-limited would be worse than
     slightly weaker search terms.
     """
-    yahoo_symbol = derive_yahoo_ticker(ticker, market)
     try:
         entry = get_fundamentals(db, [yahoo_symbol]).get(yahoo_symbol)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("news: fundamentals lookup failed for %s, searching by ticker only: %s", ticker, exc)
+        logger.warning("news: fundamentals lookup failed for %s, searching by ticker only: %s", yahoo_symbol, exc)
         return None, None
     if entry is None or entry.data is None:
         return None, None
@@ -73,11 +73,8 @@ def ticker_news(session_factory: Callable[[], Session], ticker: str, user_id: st
             .filter(TickerMetadata.ticker == ticker, TickerMetadata.user_id == user_id)
             .first()
         )
-        if metadata is None:
-            return TickerNotFound(message=f"{ticker} isn't tracked in your portfolio.").model_dump(
-                mode="json", by_alias=True
-            )
-        company_name, sector = _company_identity(db, ticker, metadata.market)
+        yahoo_symbol = derive_yahoo_ticker(ticker, metadata.market) if metadata else ticker
+        company_name, sector = _company_identity(db, yahoo_symbol)
     finally:
         db.close()
 
@@ -90,6 +87,7 @@ def ticker_news(session_factory: Callable[[], Session], ticker: str, user_id: st
         window_days=result.window_days,
         status=result.status,
         message=result.message,
+        held_in_portfolio=metadata is not None,
         items=[
             NewsItem(
                 title=item.title,

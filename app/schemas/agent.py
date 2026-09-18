@@ -51,6 +51,7 @@ class WhatIfImpact(CamelModel):
     portfolio_value_chf_after: float
     ticker_allocation_percent_before: float
     ticker_allocation_percent_after: float
+    held_in_portfolio: bool = True
     error: str | None = None
 
 
@@ -115,6 +116,7 @@ class SecurityIntrinsicValue(CamelModel):
     message: str | None = None
     as_of_date: str | None = None
     stale: bool = False
+    held_in_portfolio: bool = True
     valuation: IntrinsicValue | None = None
 
 
@@ -131,6 +133,7 @@ class SecurityFundamentals(CamelModel):
     message: str | None = None
     as_of_date: str | None = None
     stale: bool = False
+    held_in_portfolio: bool = True
 
     company_name: str | None = None
     sector: str | None = None
@@ -226,4 +229,5 @@ class TickerNews(CamelModel):
     window_days: int | None = None
     status: NewsStatus
     message: str | None = None
+    held_in_portfolio: bool = True
     items: list[NewsItem] = []

@@ -17,7 +17,6 @@ from app.schemas.agent import (
     PortfolioFundamentals,
     SecurityFundamentals,
     SecurityIntrinsicValue,
-    TickerNotFound,
     WeightedAggregates,
 )
 from app.services.fundamentals.cache import FundamentalsEntry, get_fundamentals
@@ -109,13 +108,10 @@ def ticker_fundamentals(db: Session, ticker: str, user_id: str) -> dict:
         .filter(TickerMetadata.ticker == ticker, TickerMetadata.user_id == user_id)
         .first()
     )
-    if metadata is None:
-        return TickerNotFound(message=f"{ticker} isn't tracked in your portfolio.").model_dump(
-            mode="json", by_alias=True
-        )
-    yahoo_symbol = derive_yahoo_ticker(ticker, metadata.market)
+    yahoo_symbol = derive_yahoo_ticker(ticker, metadata.market) if metadata else ticker
     entry = get_fundamentals(db, [yahoo_symbol]).get(yahoo_symbol)
     fields = _security_fields(entry, ticker, yahoo_symbol)
+    fields["held_in_portfolio"] = metadata is not None
     return SecurityFundamentals(**fields).model_dump(mode="json", by_alias=True)
 
 
@@ -126,17 +122,14 @@ def ticker_intrinsic_value(db: Session, ticker: str, user_id: str) -> dict:
         .filter(TickerMetadata.ticker == ticker, TickerMetadata.user_id == user_id)
         .first()
     )
-    if metadata is None:
-        return TickerNotFound(message=f"{ticker} isn't tracked in your portfolio.").model_dump(
-            mode="json", by_alias=True
-        )
-    yahoo_symbol = derive_yahoo_ticker(ticker, metadata.market)
+    yahoo_symbol = derive_yahoo_ticker(ticker, metadata.market) if metadata else ticker
     entry = get_fundamentals(db, [yahoo_symbol]).get(yahoo_symbol)
 
     fields = _entry_status(entry, ticker, yahoo_symbol)
     data = fields.pop("data")
     if data is not None:
         fields["valuation"] = IntrinsicValue(**assess_intrinsic_value(data, ticker))
+    fields["held_in_portfolio"] = metadata is not None
     return SecurityIntrinsicValue(**fields).model_dump(mode="json", by_alias=True)
 
 
