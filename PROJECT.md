@@ -219,6 +219,18 @@ calls) and falls back to a contextvar the `/agent/ask` loop sets from its
 own `get_authenticated_user_id` result (real MCP auth never runs for that
 path).
 
+One tool is worth calling out because it breaks the pattern of every
+other one here: `get_ticker_news` returns third-party *reporting* rather
+than a figure this app computed. Its filters (`app/services/news.py`) are
+a deliberate copy of `financial-sentiment-api`'s — the same
+"ported, not imported" convention already used for the DCF math — because
+raw Google News results for a single ticker are mostly auto-generated
+13F-filing spam and "here's why the stock moved" filler. Nothing that
+fails those filters is ever returned; instead the search window widens
+(a week, then a month, a quarter, a year) until something meaningful
+turns up, and the window actually used comes back in the response so the
+agent can say how old the news is rather than implying it's fresh.
+
 `LLMProvider` (`app/services/llm/base.py`) is a provider-agnostic seam:
 conversation history is a list of neutral `Turn` objects (`UserTurn` /
 `AssistantTurn` / `ToolResultsTurn`), plain JSON-Schema tool defs, and a

@@ -19,6 +19,7 @@ EXPECTED_TOOL_NAMES = {
     "get_portfolio_fundamentals",
     "get_ticker_fundamentals",
     "get_intrinsic_value",
+    "get_ticker_news",
     "compute_whatif",
 }
 
