@@ -125,16 +125,33 @@ class TestGetTickerNews:
         # not the bare ticker.
         assert calls[0].startswith("Nestle S.A. ")
 
-    async def test_reports_not_found_for_an_untracked_ticker(
+    async def test_works_for_a_candidate_ticker_not_yet_in_the_portfolio(
         self, db_session: Session, test_user: User, wire_tools
     ) -> None:
-        wire_tools(FakeProvider({}), lambda query: FakeFeed([]))
+        """2026-09-18: a ticker not tracked isn't an error — the agent can
+        be asked about a candidate buy too. No TickerMetadata row and no
+        fundamentals entry means no company name to drive the query, so it
+        searches by the bare ticker instead (same fallback the ETF case
+        already exercises)."""
+        calls: list[str] = []
+
+        def fetch(query: str):
+            calls.append(query)
+            # No company name known (no fundamentals) — relevance falls
+            # back to the ticker as a standalone, case-sensitive token, so
+            # the headline must spell out "TSLA", not "Tesla".
+            return FakeFeed([_entry("TSLA wins a new supply contract - Reuters")])
+
+        wire_tools(FakeProvider({}), fetch)
         set_current_user_id(test_user.id)
 
-        body = _payload(await mcp_server.call_tool("get_ticker_news", {"ticker": "TSLA"}))
+        body = _payload(await mcp_server.call_tool("get_ticker_news", {"ticker": "tsla"}))
 
-        assert body["found"] is False
-        assert "isn't tracked" in body["message"]
+        assert body["ticker"] == "TSLA"
+        assert body["status"] == "ok"
+        assert body["heldInPortfolio"] is False
+        assert body["companyName"] is None
+        assert calls[0].startswith("TSLA ")
 
     async def test_an_etf_without_fundamentals_still_gets_news_by_ticker(
         self, db_session: Session, test_user: User, wire_tools

@@ -170,12 +170,23 @@ yfinance-backed tools as everything else here.
 
 ## Portfolio assistant agent + MCP server
 
-`POST /agent/ask` is a general-purpose chat endpoint, not restricted to
-portfolio questions (that restriction was deliberately dropped on
-2026-09-18 — see `SYSTEM_PROMPT` in `app/routers/agent.py`) — it also
-happens to have tools for the user's real portfolio, and an LLM (Claude,
-via `app/services/llm/claude_provider.py`) decides when a question
-actually calls for one of those. When it does, the model never computes a
+`POST /agent/ask` is a portfolio assistant, but not restricted to only the
+tickers currently held (widened on 2026-09-18 — see `SYSTEM_PROMPT` in
+`app/routers/agent.py`): the user can ask about a candidate buy or
+general market conditions, not just an existing holding. Four of the
+tools reflect that — `get_ticker_fundamentals`, `get_intrinsic_value`,
+`get_ticker_news`, and a BUY through `compute_whatif` all work for a
+ticker with no `TickerMetadata` row, resolving a best-guess Yahoo symbol
+(`TICKER_CONFIGS`, then the bare ticker, then
+`yahoo_provider.resolve_ticker`'s `yf.Search` fallback) instead of the
+`TickerMetadata.market` a tracked ticker's would supply. Every one of
+those responses carries `heldInPortfolio` so the model doesn't have to
+infer it from, say, `sharesBefore == 0`, which is also legitimately true
+for a tracked-but-fully-sold ticker. A SELL through `compute_whatif` still
+requires an existing holding — there's no transaction history to simulate
+against otherwise. An LLM (Claude, via
+`app/services/llm/claude_provider.py`) decides which tool a question
+actually calls for; when it calls one, the model never computes a
 financial figure itself — only the app's existing deterministic services
 do (FIFO, live pricing, rollups). The response streams back as
 Server-Sent Events (`token`/`tool_call`/`tool_result`/`done`/`error`

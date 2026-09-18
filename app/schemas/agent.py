@@ -51,6 +51,10 @@ class WhatIfImpact(CamelModel):
     portfolio_value_chf_after: float
     ticker_allocation_percent_before: float
     ticker_allocation_percent_after: float
+    # False for a BUY on a candidate ticker not yet in the portfolio
+    # (2026-09-18) — shares_before is then legitimately 0, same as a
+    # tracked-but-fully-sold ticker, so this is what disambiguates the two.
+    held_in_portfolio: bool = True
     error: str | None = None
 
 
@@ -115,6 +119,10 @@ class SecurityIntrinsicValue(CamelModel):
     message: str | None = None
     as_of_date: str | None = None
     stale: bool = False
+    # False for a candidate ticker not currently in the portfolio
+    # (2026-09-18) — every other field still applies, this just says
+    # whether it's an existing holding.
+    held_in_portfolio: bool = True
     valuation: IntrinsicValue | None = None
 
 
@@ -131,6 +139,12 @@ class SecurityFundamentals(CamelModel):
     message: str | None = None
     as_of_date: str | None = None
     stale: bool = False
+    # False for a candidate ticker not currently in the portfolio
+    # (2026-09-18) — every other field still applies, this just says
+    # whether it's an existing holding. HoldingFundamentals (below) never
+    # sets this explicitly since portfolio_fundamentals() only ever lists
+    # tracked holdings, so the True default is always right there.
+    held_in_portfolio: bool = True
 
     company_name: str | None = None
     sector: str | None = None
@@ -226,4 +240,8 @@ class TickerNews(CamelModel):
     window_days: int | None = None
     status: NewsStatus
     message: str | None = None
+    # False for a candidate ticker not currently in the portfolio
+    # (2026-09-18) — news still works for it, this just says whether it's
+    # an existing holding.
+    held_in_portfolio: bool = True
     items: list[NewsItem] = []

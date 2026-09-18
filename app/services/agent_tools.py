@@ -36,17 +36,29 @@ from app.schemas.portfolio import PortfolioRollup, TickerDetail
 from app.services.agent_context import resolve_user_id
 from app.services.allocation_service import compute_allocation
 from app.services.fifo import ProcessedTransaction
+from app.services.fundamentals.base import FundamentalsRateLimited
 from app.services.fundamentals.service import (
     portfolio_fundamentals,
     ticker_fundamentals,
     ticker_intrinsic_value,
 )
+# Reaches past the FundamentalsProvider abstraction (cache.py's
+# get_fundamentals() is otherwise "the only entry point the agent tools
+# use") on purpose: resolve_ticker's yf.Search is a Yahoo-specific symbol
+# LOOKUP, not a fundamentals fetch, and has no provider-agnostic
+# equivalent to call instead. Left as a direct Yahoo dependency rather
+# than adding a seam to the provider protocol for it, since there's only
+# ever been one provider — see CONTRIBUTING.md's "don't add speculative
+# abstractions ... for cases that can't occur given how a function is
+# actually called". If a second provider is ever added, this becomes the
+# one place that needs a real decision, not a silent behavioral drift.
+from app.services.fundamentals.yahoo_provider import resolve_ticker
 from app.services.mappers import portfolio_transaction_to_processed
 from app.services.news_service import ticker_news
 from app.services.passive_rollup_service import compute_passive_rollup
 from app.services.portfolio_rollup_service import compute_portfolio_rollup
-from app.services.price_service import fetch_current_price, fetch_fx_rate_to_chf
-from app.services.ticker_config import derive_yahoo_ticker
+from app.services.price_service import PriceQuote, fetch_current_price, fetch_fx_rate_to_chf
+from app.services.ticker_config import MARKET_YAHOO_SUFFIX, TICKER_CONFIGS, derive_yahoo_ticker
 from app.services.ticker_detail import compute_ticker_detail
 from app.services.whatif_service import WhatIfImpact, WhatIfTransaction, simulate_whatif
 
@@ -87,6 +99,106 @@ def _load_existing_transactions(db: Session, ticker: str, user_id: str) -> list[
         .all()
     )
     return [portfolio_transaction_to_processed(t) for t in txns if t.type != "DIVIDEND"]
+
+
+def _guess_yahoo_symbol(ticker: str) -> str:
+    """A first guess at a Yahoo symbol with no `market` to build a suffix
+    from. TICKER_CONFIGS first (covers this table's own quirks, e.g.
+    BRK.B -> BRK-B); otherwise the bare ticker, EXCEPT a dot immediately
+    followed by a known exchange suffix (MARKET_YAHOO_SUFFIX's non-US
+    values) is left alone rather than turned into a dash — the LLM is
+    free to name a non-US ticker in already-Yahoo-suffixed form (e.g.
+    "NESN.SW") now that it isn't limited to held tickers, and blindly
+    dashing that would turn a valid symbol into an invalid one before
+    _resolve_new_position_quote ever gets a chance to try it directly.
+    """
+    if ticker in TICKER_CONFIGS:
+        return TICKER_CONFIGS[ticker].yahoo_ticker
+    if any(suffix and ticker.endswith(suffix) for suffix in MARKET_YAHOO_SUFFIX.values()):
+        return ticker
+    return ticker.replace(".", "-")
+
+
+class _WhatIfPriceError(Exception):
+    """Carries the exact user-facing message compute_whatif should return
+    for a candidate BUY whose price couldn't be resolved — keeps
+    _resolve_transactions_and_quote's return type a plain tuple instead of
+    a tuple-or-error-dict union."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+def _resolve_new_position_quote(ticker: str) -> PriceQuote:
+    """Live price for a ticker with no TickerMetadata row — a candidate
+    buy compute_whatif is evaluating, not an existing holding (2026-09-18).
+    Tries a best-guess symbol (_guess_yahoo_symbol) directly first; if that
+    doesn't resolve, falls back to yahoo_provider.resolve_ticker's
+    yf.Search — the same fallback YahooFundamentalsProvider.fetch already
+    uses for fundamentals — which catches the common case of a non-US
+    ticker needing a suffix like ".SW"/".L" the guess didn't have.
+
+    A rate limit is NOT a "ticker not found" and must not be reported as
+    one — Yahoo throttles by request volume, not per-symbol, so a 429 here
+    likely means every candidate-ticker lookup is failing right now, not
+    that this one doesn't exist. `fetch_current_price` never raises
+    FundamentalsRateLimited itself (that type belongs to the fundamentals
+    provider, not price_service.py) — only resolve_ticker's own yf.Search
+    can, on its own 429 (see its docstring). Deliberately NOT caught here:
+    it propagates out of this function so the caller can tell it apart
+    from a genuine unresolvable ticker, instead of both collapsing into
+    the same generic failure.
+    """
+    candidate = _guess_yahoo_symbol(ticker)
+    try:
+        return fetch_current_price(candidate)
+    except Exception:
+        resolved = resolve_ticker(candidate)
+        if resolved == candidate:
+            raise
+        return fetch_current_price(resolved)
+
+
+def _resolve_transactions_and_quote(
+    db: Session, ticker: str, user_id: str, metadata: TickerMetadata | None
+) -> tuple[list[ProcessedTransaction], PriceQuote, float]:
+    """The tracked-vs-candidate branch compute_whatif needs before it can
+    call simulate_whatif, split out to keep the tool function itself at
+    the orchestration level. Raises _WhatIfPriceError, with a message
+    already worded for the caller to return as-is, for a candidate BUY
+    whose price can't be resolved. A TRACKED ticker's fetch failure is
+    deliberately NOT wrapped and propagates unchanged — matches this
+    tool's existing, tested behavior (see
+    test_a_raising_tool_yields_a_graceful_error_frame_not_a_truncated_stream
+    in tests/test_agent_route.py): only the candidate path is new here, so
+    only it gets new error handling.
+    """
+    if metadata is not None:
+        processed = _load_existing_transactions(db, ticker, user_id)
+        yahoo_ticker = derive_yahoo_ticker(ticker, metadata.market)
+        quote = fetch_current_price(yahoo_ticker)
+        fx_rate = fetch_fx_rate_to_chf(metadata.native_currency)
+        return processed, quote, fx_rate
+
+    # A candidate BUY, not an existing holding (2026-09-18) — no existing
+    # transactions to simulate against, and no TickerMetadata.market to
+    # resolve the Yahoo symbol from, so a best-guess candidate is resolved
+    # instead. `quote.currency` (not a stored native_currency) is the FX
+    # basis, since there's no metadata row to carry one.
+    try:
+        quote = _resolve_new_position_quote(ticker)
+    except FundamentalsRateLimited:
+        # Not "not found" - Yahoo throttles by request volume, not
+        # per-symbol, so this almost certainly means every candidate-
+        # ticker lookup is failing right now, not that this one doesn't
+        # exist. Reporting it as a typo would be actively misleading on
+        # an investing question.
+        raise _WhatIfPriceError("Price data is temporarily rate-limited upstream — try again shortly.") from None
+    except Exception:
+        raise _WhatIfPriceError(f"Could not find live price data for {ticker}.") from None
+    fx_rate = fetch_fx_rate_to_chf(quote.currency)
+    return [], quote, fx_rate
 
 
 def register_tools(mcp: MCPServer) -> None:
@@ -162,19 +274,23 @@ def register_tools(mcp: MCPServer) -> None:
     @mcp.tool()
     async def get_ticker_fundamentals(ticker: str) -> dict:
         """Get company fundamentals and a value-investing metric-by-metric
-        verdict for one ticker already tracked in the portfolio. Call this
-        when a question is about the valuation or business quality of a
-        single holding. Returns `unavailable` for a security with no
-        published fundamentals (ETF / gold / crypto).
+        verdict for one ticker. Works for an existing holding or a
+        candidate the user is considering buying — check `heldInPortfolio`
+        rather than assuming. Call this when a question is about the
+        valuation or business quality of a single company. Returns
+        `unavailable` for a security with no published fundamentals
+        (ETF / gold / crypto).
         """
         with _tool_context() as (user_id, db):
             return ticker_fundamentals(db, ticker, user_id)
 
     @mcp.tool()
     async def get_intrinsic_value(ticker: str) -> dict:
-        """Estimate the intrinsic (fair) value of one holding with a
+        """Estimate the intrinsic (fair) value of one company with a
         scenario-weighted 2-stage DCF, and compare it to the current price
-        as a margin of safety. Call this for "is X worth its price / how
+        as a margin of safety. Works for an existing holding or a
+        candidate the user is considering buying — check `heldInPortfolio`
+        rather than assuming. Call this for "is X worth its price / how
         much is X really worth / what's my margin of safety on X" style
         questions. Returns the intrinsic value, the % gap vs price
         (positive = overvalued), the valuation basis used (EPS / FCF /
@@ -188,13 +304,15 @@ def register_tools(mcp: MCPServer) -> None:
 
     @mcp.tool()
     async def get_ticker_news(ticker: str, limit: int = 5) -> dict:
-        """Get recent news headlines about one holding's company, filtered
-        down to meaningful coverage — auto-generated 13F-filing spam,
-        "here's why the stock moved" pieces and listicle bait are removed
-        rather than returned. Call this for "what's going on with X / any
-        news on X / why has X been in the headlines" style questions, and
-        alongside the fundamentals tools when a valuation question needs
-        recent context. The search starts at the past week and widens only
+        """Get recent news headlines about one company, filtered down to
+        meaningful coverage — auto-generated 13F-filing spam, "here's why
+        the stock moved" pieces and listicle bait are removed rather than
+        returned. Works for an existing holding or a candidate the user is
+        considering buying — check `heldInPortfolio` rather than assuming.
+        Call this for "what's going on with X / any news on X / why has X
+        been in the headlines" style questions, and alongside the
+        fundamentals tools when a valuation question needs recent
+        context. The search starts at the past week and widens only
         if nothing meaningful turns up, so check `windowDays` before
         calling anything "recent": a value of 90 or 365 means the company
         has genuinely been quiet. `status` is "no_news" when even the
@@ -219,14 +337,18 @@ def register_tools(mcp: MCPServer) -> None:
         quantity: float,
         price_per_share: float | None = None,
     ) -> dict:
-        """Simulate a hypothetical BUY or SELL of a ticker already tracked in
-        the portfolio (it must already exist in the portfolio's ticker list,
-        even if fully sold) and report the before/after impact on shares,
-        cost basis, market value, and that ticker's percentage of the total
-        portfolio. If price_per_share is omitted, today's live price is
-        used. Call this for "what if I bought/sold X shares of Y" questions
-        — never estimate this math yourself, always call this tool.
+        """Simulate a hypothetical BUY or SELL and report the before/after
+        impact on shares, cost basis, market value, and that ticker's
+        percentage of the total portfolio. A SELL only works for a ticker
+        already tracked in the portfolio (even if fully sold) — there's
+        nothing to sell otherwise. A BUY also works for a ticker NOT yet
+        tracked, to evaluate it as a brand-new candidate position:
+        sharesBefore is 0 and heldInPortfolio is false in that case. If
+        price_per_share is omitted, today's live price is used. Call this
+        for "what if I bought/sold X shares of Y" questions — never
+        estimate this math yourself, always call this tool.
         """
+        ticker = ticker.upper()
         # quantity/price_per_share come from the LLM's tool-call arguments,
         # an external trust boundary like any other user input. An unchecked
         # non-positive, NaN, or infinite value doesn't error, it flows
@@ -248,18 +370,20 @@ def register_tools(mcp: MCPServer) -> None:
                 .filter(TickerMetadata.ticker == ticker, TickerMetadata.user_id == user_id)
                 .first()
             )
-            if metadata is None:
+            if metadata is None and action == "SELL":
                 return {
                     "error": (
-                        f"{ticker} isn't tracked in your portfolio. What-if simulations only work for "
-                        "tickers that already exist in your portfolio's ticker list."
+                        f"{ticker} isn't tracked in your portfolio, so there's nothing to sell. "
+                        'What-if SELL only works for a ticker already held (even if fully sold) — '
+                        f'use action="BUY" to evaluate {ticker} as a new position instead.'
                     )
                 }
 
-            processed = _load_existing_transactions(db, ticker, user_id)
-            yahoo_ticker = derive_yahoo_ticker(ticker, metadata.market)
-            quote = fetch_current_price(yahoo_ticker)
-            fx_rate = fetch_fx_rate_to_chf(metadata.native_currency)
+            try:
+                processed, quote, fx_rate = _resolve_transactions_and_quote(db, ticker, user_id, metadata)
+            except _WhatIfPriceError as exc:
+                return {"error": exc.message}
+
             resolved_price = price_per_share if price_per_share is not None else quote.price
             portfolio_value_chf = compute_portfolio_rollup(db, user_id).total_market_value_chf
 
@@ -272,4 +396,6 @@ def register_tools(mcp: MCPServer) -> None:
                 fx_rate_to_chf=fx_rate,
                 portfolio_market_value_chf_before=portfolio_value_chf,
             )
-            return WhatIfImpactOut(**asdict(impact)).model_dump(mode="json", by_alias=True)
+            return WhatIfImpactOut(**asdict(impact), held_in_portfolio=metadata is not None).model_dump(
+                mode="json", by_alias=True
+            )

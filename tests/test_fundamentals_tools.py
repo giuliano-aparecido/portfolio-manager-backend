@@ -4,6 +4,7 @@ against seeded Postgres data, with a fake fundamentals provider.
 """
 
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -120,20 +121,32 @@ class TestGetTickerFundamentals:
         assert body["ticker"] == "AAPL"
         assert body["yahooSymbol"] == "AAPL"
         assert body["status"] == "ok"
+        assert body["heldInPortfolio"] is True
         assert body["peTrailing"] == 24.0
         assert body["screenOverall"]
         assert any(m["metric"] == "pe_trailing" for m in body["metrics"])
 
-    async def test_reports_not_found_for_an_untracked_ticker(
+    async def test_works_for_a_candidate_ticker_not_yet_in_the_portfolio(
         self, db_session: Session, test_user: User, wire_tools
     ) -> None:
-        wire_tools(FakeProvider({}))
+        """2026-09-18: a ticker not tracked isn't an error — the agent can
+        be asked about a candidate buy too. No TickerMetadata row means no
+        `market` to resolve a Yahoo suffix from, so the bare ticker is used
+        as the symbol directly (there's no suffix to resolve for a plain
+        US ticker like TSLA anyway)."""
+        tsla = FundamentalsData(symbol="TSLA", company_name="Tesla, Inc.", sector="Consumer Cyclical", price=250.0)
+        provider = FakeProvider({"TSLA": tsla})
+        wire_tools(provider)
         set_current_user_id(test_user.id)
 
-        body = _payload(await mcp_server.call_tool("get_ticker_fundamentals", {"ticker": "TSLA"}))
+        body = _payload(await mcp_server.call_tool("get_ticker_fundamentals", {"ticker": "tsla"}))
 
-        assert body["found"] is False
-        assert "isn't tracked" in body["message"]
+        assert body["ticker"] == "TSLA"
+        assert body["yahooSymbol"] == "TSLA"
+        assert body["status"] == "ok"
+        assert body["heldInPortfolio"] is False
+        assert body["companyName"] == "Tesla, Inc."
+        assert provider.calls == ["TSLA"]
 
     async def test_reports_unavailable_for_an_etf(self, db_session: Session, test_user: User, wire_tools) -> None:
         _seed_holding(db_session, test_user, "VWRA", "SIX", "CHF")
@@ -212,21 +225,28 @@ class TestGetIntrinsicValue:
 
         assert body["ticker"] == "AAPL"
         assert body["status"] == "ok"
+        assert body["heldInPortfolio"] is True
         iv = body["valuation"]
         assert iv["available"] is True
         assert iv["valuationBasis"] in {"EPS-based", "FCF-based", "Dividend-based", "Revenue-based"}
         assert "marginOfSafetyPercent" in iv
         assert iv["assessment"].startswith("Intrinsic Value")
 
-    async def test_reports_not_found_for_an_untracked_ticker(
+    async def test_works_for_a_candidate_ticker_not_yet_in_the_portfolio(
         self, db_session: Session, test_user: User, wire_tools
     ) -> None:
-        wire_tools(FakeProvider({}))
+        # 2026-09-18: see the matching test on TestGetTickerFundamentals for
+        # the reasoning. Reuses AAPL_FUNDAMENTALS's shape (it has the
+        # eps/growth fields a DCF needs) under a different symbol.
+        tsla = replace(AAPL_FUNDAMENTALS, symbol="TSLA")
+        wire_tools(FakeProvider({"TSLA": tsla}))
         set_current_user_id(test_user.id)
 
         body = _payload(await mcp_server.call_tool("get_intrinsic_value", {"ticker": "TSLA"}))
 
-        assert body["found"] is False
+        assert body["status"] == "ok"
+        assert body["heldInPortfolio"] is False
+        assert body["valuation"]["available"] is True
 
     async def test_reports_unavailable_for_an_etf(
         self, db_session: Session, test_user: User, wire_tools
