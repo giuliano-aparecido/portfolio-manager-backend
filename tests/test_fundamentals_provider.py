@@ -137,10 +137,30 @@ def test_fetch_retries_with_resolved_symbol_when_bare_one_is_empty(monkeypatch):
 
 
 def test_fetch_raises_unavailable_when_the_call_succeeds_but_carries_no_data(monkeypatch):
-    monkeypatch.setattr(yp.yf, "Ticker", lambda s: _FakeTicker({}))
+    # A genuine no-fundamentals security still carries substantive
+    # metadata (quoteType, exchange, etc.) even without a price/market
+    # cap - that's what distinguishes it from a degraded response below.
+    monkeypatch.setattr(
+        yp.yf, "Ticker",
+        lambda s: _FakeTicker({"quoteType": "ETF", "shortName": "Vanguard FTSE All-World UCITS ETF", "currency": "USD"}),
+    )
     monkeypatch.setattr(yp.yf, "Search", lambda q: _FakeSearch([]))
     with pytest.raises(FundamentalsUnavailable):
         YahooFundamentalsProvider().fetch("VWRA.SW")
+
+
+def test_fetch_raises_a_retryable_error_on_a_degraded_empty_response(monkeypatch):
+    # Regression: yfinance can return a near-empty `.info` dict (no price,
+    # no quoteType, no exception raised) on a transient Yahoo hiccup -
+    # confirmed live, this misclassified UBER (an ordinary NYSE equity) as
+    # permanently "unavailable" for the rest of the day. Without a real
+    # quoteType, "no price" must NOT be trusted as a genuine no-
+    # fundamentals verdict - it has to stay retryable like any other
+    # transient failure.
+    monkeypatch.setattr(yp.yf, "Ticker", lambda s: _FakeTicker({}))
+    monkeypatch.setattr(yp.yf, "Search", lambda q: _FakeSearch([]))
+    with pytest.raises(RuntimeError):
+        YahooFundamentalsProvider().fetch("UBER")
 
 
 def test_fetch_propagates_a_transient_error_rather_than_calling_it_unavailable(monkeypatch):
