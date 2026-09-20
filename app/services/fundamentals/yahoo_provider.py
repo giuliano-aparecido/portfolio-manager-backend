@@ -11,10 +11,15 @@ Adapted from financial-sentiment-api's app/services/fundamentals.py
 - HTTP 429 is surfaced as FundamentalsRateLimited so the cache can retry
   just the throttled symbols.
 - FundamentalsUnavailable is raised ONLY when the `.info` call itself
-  succeeds but genuinely carries no fundamentals (an ETF, a physical-gold
-  tracker, a crypto pair). A transient failure (timeout, 5xx, connection
-  reset) propagates as an ordinary exception so the cache records it as a
-  retryable error rather than a permanent "no fundamentals for a day".
+  succeeds, has no price/market cap, AND still carries a real `quoteType`
+  (an ETF, a physical-gold tracker, a crypto pair) - yfinance can also
+  return a `.info` dict with neither, on a transient Yahoo-side hiccup
+  with no exception raised, so a missing `quoteType` is treated as that
+  instead of a genuine no-fundamentals verdict (see `fetch`). Any other
+  transient failure (timeout, 5xx, connection reset, rate limit)
+  propagates or is wrapped as an ordinary exception so the cache records
+  it as a retryable error rather than a permanent "no fundamentals for a
+  day".
 """
 
 import logging
@@ -101,10 +106,11 @@ def resolve_ticker(ticker: str) -> str:
 
 
 def _fetch_info(symbol: str) -> dict | None:
-    """`.info` when the call SUCCEEDED and carried a price or a market cap.
-    None when the call succeeded but the payload is empty (a genuine
-    "no fundamentals" signal). Raises FundamentalsRateLimited on 429 and
-    lets any other fetch error propagate as a transient failure.
+    """Raw `.info` dict when the call succeeded (whatever it carries -
+    judging whether it has usable fundamentals is fetch()'s job, done
+    only after a resolved-symbol retry has also been given a chance).
+    Raises FundamentalsRateLimited on 429 and lets any other fetch error
+    propagate as a transient failure.
     """
     try:
         info = yf.Ticker(symbol).info
@@ -112,11 +118,15 @@ def _fetch_info(symbol: str) -> dict | None:
         if _is_rate_limit_error(exc):
             raise FundamentalsRateLimited(str(exc)) from exc
         raise  # transient — cache.py records this as a retryable error
-    if not isinstance(info, dict):
-        return None
-    price = info.get("currentPrice") or info.get("regularMarketPrice")
-    market_cap = info.get("marketCap")
-    return info if (price is not None or market_cap is not None) else None
+    return info if isinstance(info, dict) else None
+
+
+def _has_price(info: dict) -> bool:
+    return (
+        info.get("currentPrice") is not None
+        or info.get("regularMarketPrice") is not None
+        or info.get("marketCap") is not None
+    )
 
 
 def _to_data(symbol: str, info: dict) -> FundamentalsData:
@@ -226,13 +236,16 @@ class YahooFundamentalsProvider:
     def fetch(self, yahoo_symbol: str) -> FundamentalsData:
         info = _fetch_info(yahoo_symbol)
         symbol = yahoo_symbol
-        if info is None:
+        if not info or not _has_price(info):
             resolved = resolve_ticker(yahoo_symbol)
             if resolved != yahoo_symbol:
-                info = _fetch_info(resolved)
-                symbol = resolved
-        if info is None:
-            raise FundamentalsUnavailable(f"No Yahoo fundamentals for {yahoo_symbol}")
+                resolved_info = _fetch_info(resolved)
+                if resolved_info and _has_price(resolved_info):
+                    info, symbol = resolved_info, resolved
+        if not info or not _has_price(info):
+            if info and info.get("quoteType"):
+                raise FundamentalsUnavailable(f"No Yahoo fundamentals for {yahoo_symbol}")
+            raise RuntimeError(f"Degraded/incomplete Yahoo .info response for {yahoo_symbol} (no price, no quoteType)")
 
         data = _to_data(yahoo_symbol, info)
 
