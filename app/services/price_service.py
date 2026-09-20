@@ -32,6 +32,7 @@ repeating it per page. The frontend's explicit "Refresh" button passes
 must never silently return stale data.
 """
 
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -79,6 +80,24 @@ def fetch_current_price(yahoo_ticker: str, *, force_refresh: bool = False) -> Pr
     return quote
 
 
+def _finite(value: float | None) -> bool:
+    """True only for a real, usable number — None and NaN are both falsy
+    in the "missing" sense we want, but NaN is truthy under a plain `if`
+    check, so a bare `if value` guard silently lets it through. Confirmed
+    live: fast_info occasionally hands back NaN (not None) for
+    regularMarketPreviousClose/lastPrice, and a NaN daily_change/
+    daily_change_percent computed from it survives all the way into a
+    JSON payload sent to Gemini, which rejects the literal NaN token
+    outright (standard JSON has no NaN) - a downstream 400, not a crash
+    here. math.isfinite also rejects +/-inf for the same reason."""
+    return value is not None and math.isfinite(value)
+
+
+def _valid_price(value: float | None) -> bool:
+    """A usable traded price: finite and positive."""
+    return _finite(value) and value > 0
+
+
 def _fetch_current_price_uncached(yahoo_ticker: str) -> PriceQuote:
     ticker = yf.Ticker(yahoo_ticker)
     fast = ticker.fast_info
@@ -92,21 +111,24 @@ def _fetch_current_price_uncached(yahoo_ticker: str) -> PriceQuote:
     # 235.5 prior close, understating the day's gain by two-thirds).
     # regularMarketPreviousClose matched the true previous close every time
     # it was checked — prefer it, falling back to previousClose only if it's
-    # ever missing.
-    previous_close = fast.get("regularMarketPreviousClose") or fast.get("previousClose")
+    # ever missing (or NaN — see _finite).
+    regular_previous_close = fast.get("regularMarketPreviousClose")
+    previous_close = regular_previous_close if _finite(regular_previous_close) else fast.get("previousClose")
 
-    if not raw_price or raw_price <= 0:
+    if not _valid_price(raw_price):
         # Defensive fallback — fast_info has occasionally been missing a
         # field yfinance normally provides; try the last close from history
         # before giving up entirely.
         hist = ticker.history(period="5d", interval="1d")
         if hist.empty:
-            raise RuntimeError(f"No valid price from Yahoo Finance for {yahoo_ticker}")
+            raise RuntimeError(f"No price history available from Yahoo Finance for {yahoo_ticker}")
         raw_price = float(hist["Close"].iloc[-1])
         previous_close = float(hist["Close"].iloc[-2]) if len(hist) > 1 else raw_price
+        if not _valid_price(raw_price):
+            raise RuntimeError(f"No valid price from Yahoo Finance for {yahoo_ticker}")
 
-    daily_change = (raw_price - previous_close) if previous_close else 0.0
-    daily_change_percent = (daily_change / previous_close * 100) if previous_close else 0.0
+    daily_change = (raw_price - previous_close) if _valid_price(previous_close) else 0.0
+    daily_change_percent = (daily_change / previous_close * 100) if _valid_price(previous_close) else 0.0
     timestamp = datetime.now(timezone.utc)  # always "now" (fetch time), never from the Yahoo response
 
     # Yahoo's explicit signal for pence (lowercase p) — chosen over any
@@ -143,7 +165,7 @@ def fetch_fx_rate_to_chf(native_currency: str, *, force_refresh: bool = False) -
 
     ticker = yf.Ticker(f"{native_currency}CHF=X")
     rate = ticker.fast_info.get("lastPrice")
-    if not rate or rate <= 0:
+    if not _valid_price(rate):
         raise RuntimeError(f"No valid FX rate from Yahoo Finance for {native_currency}CHF=X")
 
     with _cache_lock:
@@ -166,4 +188,7 @@ def fetch_historical_fx_rate(native_currency: str, date: datetime) -> float:
     filtered = hist[hist.index <= date]
     if filtered.empty:
         raise RuntimeError(f"No historical FX rate found for {native_currency}CHF=X near {date.date().isoformat()}")
-    return float(filtered["Close"].iloc[-1])
+    rate = float(filtered["Close"].iloc[-1])
+    if not _valid_price(rate):
+        raise RuntimeError(f"No valid historical FX rate found for {native_currency}CHF=X near {date.date().isoformat()}")
+    return rate
