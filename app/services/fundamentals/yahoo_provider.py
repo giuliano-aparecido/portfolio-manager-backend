@@ -11,15 +11,18 @@ Adapted from financial-sentiment-api's app/services/fundamentals.py
 - HTTP 429 is surfaced as FundamentalsRateLimited so the cache can retry
   just the throttled symbols.
 - FundamentalsUnavailable is raised ONLY when the `.info` call itself
-  succeeds, has no price/market cap, AND still carries a real `quoteType`
-  (an ETF, a physical-gold tracker, a crypto pair) - yfinance can also
-  return a `.info` dict with neither, on a transient Yahoo-side hiccup
-  with no exception raised, so a missing `quoteType` is treated as that
-  instead of a genuine no-fundamentals verdict (see `fetch`). Any other
-  transient failure (timeout, 5xx, connection reset, rate limit)
-  propagates or is wrapped as an ordinary exception so the cache records
-  it as a retryable error rather than a permanent "no fundamentals for a
-  day".
+  succeeds, has no price/market cap, AND carries a `quoteType` other than
+  "EQUITY" (an ETF, a physical-gold tracker, a crypto pair) - yfinance can
+  also return a `.info` dict with no price and no quoteType at all (a
+  transient Yahoo-side hiccup, no exception raised), or - confirmed live
+  from a shared/datacenter IP - one that still says quoteType="EQUITY"
+  while stripping the actual price data. An EQUITY always trades with a
+  live price when Yahoo has real data, so both cases are treated as
+  degraded/transient rather than a genuine no-fundamentals verdict (see
+  `fetch`). Any other transient failure (timeout, 5xx, connection reset,
+  rate limit) propagates or is wrapped as an ordinary exception so the
+  cache records it as a retryable error rather than a permanent "no
+  fundamentals for a day".
 """
 
 import logging
@@ -243,9 +246,10 @@ class YahooFundamentalsProvider:
                 if resolved_info and _has_price(resolved_info):
                     info, symbol = resolved_info, resolved
         if not info or not _has_price(info):
-            if info and info.get("quoteType"):
+            quote_type = info.get("quoteType") if info else None
+            if quote_type and quote_type != "EQUITY":
                 raise FundamentalsUnavailable(f"No Yahoo fundamentals for {yahoo_symbol}")
-            raise RuntimeError(f"Degraded/incomplete Yahoo .info response for {yahoo_symbol} (no price, no quoteType)")
+            raise RuntimeError(f"Degraded/incomplete Yahoo .info response for {yahoo_symbol} (no price, quoteType={quote_type!r})")
 
         data = _to_data(yahoo_symbol, info)
 

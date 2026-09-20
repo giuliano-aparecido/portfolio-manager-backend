@@ -163,6 +163,22 @@ def test_fetch_raises_a_retryable_error_on_a_degraded_empty_response(monkeypatch
         YahooFundamentalsProvider().fetch("UBER")
 
 
+def test_fetch_raises_a_retryable_error_on_a_stripped_equity_response(monkeypatch):
+    # Regression #2: confirmed live in production, a throttled/shared-IP
+    # Yahoo response can carry quoteType="EQUITY" while still stripping
+    # the actual price data - a plain quoteType check alone wasn't enough
+    # (this is exactly what UBER hit again after the first fix deployed).
+    # An EQUITY always trades with a live price when Yahoo has real data,
+    # so this must stay retryable too, not become a permanent verdict.
+    monkeypatch.setattr(
+        yp.yf, "Ticker",
+        lambda s: _FakeTicker({"quoteType": "EQUITY", "shortName": "Uber Technologies, Inc.", "currency": "USD"}),
+    )
+    monkeypatch.setattr(yp.yf, "Search", lambda q: _FakeSearch([]))
+    with pytest.raises(RuntimeError):
+        YahooFundamentalsProvider().fetch("UBER")
+
+
 def test_fetch_propagates_a_transient_error_rather_than_calling_it_unavailable(monkeypatch):
     # A timeout / 5xx must not be cached as "this security has no
     # fundamentals" — it has to stay retryable.
