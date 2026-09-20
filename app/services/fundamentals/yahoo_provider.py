@@ -12,14 +12,14 @@ Adapted from financial-sentiment-api's app/services/fundamentals.py
   just the throttled symbols.
 - FundamentalsUnavailable is raised ONLY when the `.info` call itself
   succeeds, has no price/market cap, AND still carries a real `quoteType`
-  (an ETF, a physical-gold tracker, a crypto pair). A transient failure
-  (timeout, 5xx, connection reset) propagates as an ordinary exception so
-  the cache records it as a retryable error rather than a permanent "no
-  fundamentals for a day" - the same applies to a `.info` response with
-  no price AND no quoteType (a partial/degraded Yahoo response rather
-  than a genuine no-fundamentals security - confirmed live: without this
-  distinction, an ordinary NYSE stock got permanently miscached as
-  "unavailable" for a day off one degraded response), see `_fetch_info`.
+  (an ETF, a physical-gold tracker, a crypto pair) - yfinance can also
+  return a `.info` dict with neither, on a transient Yahoo-side hiccup
+  with no exception raised, so a missing `quoteType` is treated as that
+  instead of a genuine no-fundamentals verdict (see `fetch`). Any other
+  transient failure (timeout, 5xx, connection reset, rate limit)
+  propagates or is wrapped as an ordinary exception so the cache records
+  it as a retryable error rather than a permanent "no fundamentals for a
+  day".
 """
 
 import logging
@@ -122,7 +122,11 @@ def _fetch_info(symbol: str) -> dict | None:
 
 
 def _has_price(info: dict) -> bool:
-    return info.get("currentPrice") is not None or info.get("regularMarketPrice") is not None or info.get("marketCap") is not None
+    return (
+        info.get("currentPrice") is not None
+        or info.get("regularMarketPrice") is not None
+        or info.get("marketCap") is not None
+    )
 
 
 def _to_data(symbol: str, info: dict) -> FundamentalsData:
@@ -239,19 +243,6 @@ class YahooFundamentalsProvider:
                 if resolved_info and _has_price(resolved_info):
                     info, symbol = resolved_info, resolved
         if not info or not _has_price(info):
-            # No price/market cap after trying both the bare and resolved
-            # symbol - either a genuine no-fundamentals security (ETF/
-            # gold/crypto, which still carries a real quoteType) or
-            # yfinance handing back a partial/degraded `.info` response on
-            # a transient Yahoo hiccup, with no exception raised either
-            # way. Confirmed live: without this distinction, an ordinary
-            # NYSE equity (UBER) got permanently miscached as
-            # "unavailable" for the rest of the day off one degraded
-            # response - see cache.py's `unavailable` short-circuit, which
-            # never retries a symbol again until the next UTC day once
-            # that flag is set. Require a real quoteType before trusting
-            # "no price" as a permanent verdict; otherwise raise a plain
-            # error so cache.py records a retryable failure instead.
             if info and info.get("quoteType"):
                 raise FundamentalsUnavailable(f"No Yahoo fundamentals for {yahoo_symbol}")
             raise RuntimeError(f"Degraded/incomplete Yahoo .info response for {yahoo_symbol} (no price, no quoteType)")
