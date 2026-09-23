@@ -138,8 +138,11 @@ def _normalize_pence_quote(
     """
     if currency not in _PENCE_CURRENCIES:
         return currency, price, year_low, year_high
-    to_pounds = lambda v: v / 100 if v is not None else None  # noqa: E731
-    return "GBP", to_pounds(price), to_pounds(year_low), to_pounds(year_high)
+
+    def _to_pounds(v: float | None) -> float | None:
+        return v / 100 if v is not None else None
+
+    return "GBP", _to_pounds(price), _to_pounds(year_low), _to_pounds(year_high)
 
 
 def resolve_ticker(ticker: str) -> str:

@@ -160,6 +160,14 @@ def test_to_data_converts_gbx_the_same_as_gbp_pence():
     assert data.price == 41.98
 
 
+def test_to_data_pence_conversion_is_none_safe_for_a_missing_year_range():
+    info = {**_GBP_PENCE_INFO, "fiftyTwoWeekLow": None, "fiftyTwoWeekHigh": None}
+    data = _to_data("BATS.L", info)
+    assert data.price == 41.98
+    assert data.year_low is None
+    assert data.year_high is None
+
+
 def test_fetch_succeeds_directly(monkeypatch):
     monkeypatch.setattr(yp.yf, "Ticker", lambda s: _FakeTicker(FULL_INFO))
     data = YahooFundamentalsProvider().fetch("AAPL")
