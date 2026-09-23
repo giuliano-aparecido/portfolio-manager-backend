@@ -88,21 +88,39 @@ def test_unavailable_when_the_model_has_no_usable_basis():
     assert "applicable" in result["reason"].lower()
 
 
-def test_unavailable_when_price_and_financial_currency_genuinely_differ():
-    # Mondi plc: GBP-quoted on the LSE (after yahoo_provider.py's own
-    # pence-to-pounds normalization), EUR financials - a real cross-
-    # currency case with no FX rate wired into this module. Every basis
-    # (eps/dividends/fcf/revenue) compares a financial_currency-denominated
-    # per-share figure against a currency-denominated price, so all of
-    # them must decline rather than silently mix currencies. Confirmed
-    # live 2026-09-24: before this guard covered eps/dividends too, this
-    # exact shape produced a confidently wrong "overvalued by >150%".
-    result = assess_intrinsic_value(
-        _data(currency="GBP", financial_currency="EUR"),
-        "MNDI",
-    )
-    assert result["available"] is False
-    assert "applicable" in result["reason"].lower()
+def test_revenue_and_fcf_bases_unavailable_when_price_and_financial_currency_genuinely_differ():
+    # total_revenue/free_cash_flow ARE genuinely reported in
+    # financial_currency (company-total figures straight from the
+    # financial statements), so a real cross-currency case with no FX rate
+    # wired into this module (e.g. Mondi plc: GBP-quoted on the LSE, EUR
+    # financials) must decline these two bases rather than silently divide
+    # a EUR total by a GBP-derived share count.
+    fundamentals = {"total_revenue": 4.0e11, "market_cap": 3.0e12, "price": 300.0}
+    assert valuation.cash_flow_basis_value(
+        "revenue", {**fundamentals, "currency": "GBP", "financial_currency": "EUR"}
+    ) is None
+    assert valuation.cash_flow_basis_value(
+        "fcf", {**fundamentals, "free_cash_flow": 1.0e11, "currency": "GBP", "financial_currency": "EUR"}
+    ) is None
+
+
+def test_eps_and_dividends_bases_available_despite_a_currency_mismatch():
+    # Unlike revenue/fcf, eps_trailing/dividend_rate are yfinance's own
+    # PER-SHARE stock statistics - confirmed live these are already
+    # expressed in the TRADING currency regardless of financial_currency,
+    # across both a direct dual-currency listing (Mondi: GBP-quoted/EUR-
+    # financials) and several ADRs (BABA/TM/SNY/TSM: USD-quoted, home-
+    # currency financials) - Yahoo's own priceToBook/dividendYield/
+    # trailingPE fields reconcile against the TRADING-currency price in
+    # every case, never financial_currency. An earlier version of this fix
+    # gated these two bases the same way as revenue/fcf and silently
+    # nulled out DCF coverage for any ADR - reverted.
+    assert valuation.cash_flow_basis_value(
+        "eps", {"eps_trailing": 8.71, "currency": "USD", "financial_currency": "CNY"}
+    ) == 8.71
+    assert valuation.cash_flow_basis_value(
+        "dividends", {"dividend_rate": 2.12, "currency": "USD", "financial_currency": "JPY"}
+    ) == 2.12
 
 
 def test_available_when_currency_and_financial_currency_match():
