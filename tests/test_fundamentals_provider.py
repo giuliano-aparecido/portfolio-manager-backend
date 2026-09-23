@@ -119,6 +119,47 @@ def test_to_data_drops_non_numeric_strings_in_numeric_fields():
     assert data.sector == "Technology"  # string fields are untouched
 
 
+# Real BATS.L info (2026-09-24): "currency": "GBp" (pence), but marketCap
+# is already price-in-pounds x shares, and trailingEps/bookValue/
+# dividendRate are all already in whole pounds too.
+_GBP_PENCE_INFO = {
+    **FULL_INFO,
+    "shortName": "British American Tobacco p.l.c.",
+    "currency": "GBp",
+    "financialCurrency": "GBP",
+    "currentPrice": 4198.0,
+    "fiftyTwoWeekLow": 3677.0,
+    "fiftyTwoWeekHigh": 5368.0,
+    "trailingEps": 2.91,
+    "bookValue": 21.472,
+    "dividendRate": 2.45,
+}
+
+
+def test_to_data_converts_a_pence_quote_to_pounds():
+    data = _to_data("BATS.L", _GBP_PENCE_INFO)
+    assert data.currency == "GBP"
+    assert data.price == 41.98
+    assert data.year_low == 36.77
+    assert data.year_high == 53.68
+    # Already-in-pounds fields are untouched.
+    assert data.eps_trailing == 2.91
+    assert data.book_value_per_share == 21.472
+    assert data.dividend_rate == 2.45
+
+
+def test_to_data_leaves_a_pound_quote_alone():
+    data = _to_data("AAPL", FULL_INFO)
+    assert data.currency == "USD"
+    assert data.price == 189.30
+
+
+def test_to_data_converts_gbx_the_same_as_gbp_pence():
+    data = _to_data("BATS.L", {**_GBP_PENCE_INFO, "currency": "GBX"})
+    assert data.currency == "GBP"
+    assert data.price == 41.98
+
+
 def test_fetch_succeeds_directly(monkeypatch):
     monkeypatch.setattr(yp.yf, "Ticker", lambda s: _FakeTicker(FULL_INFO))
     data = YahooFundamentalsProvider().fetch("AAPL")

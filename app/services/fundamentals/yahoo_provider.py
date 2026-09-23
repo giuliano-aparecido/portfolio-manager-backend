@@ -88,6 +88,60 @@ def _num(value: object) -> float | None:
         return None
 
 
+# Yahoo quotes LSE-listed securities' raw price ticks in PENCE ("GBp" -
+# note the lowercase p, the only thing distinguishing it from "GBP" - or
+# occasionally "GBX"), while every other numeric field on the SAME
+# `.info` response - market cap, EPS, book value, dividend rate, revenue,
+# free cash flow - is already in whole POUNDS, matching the company's own
+# financial-statement currency (`financialCurrency`). Confirmed live
+# 2026-09-24 on BATS.L: currency="GBp", currentPrice=4198.0, but
+# marketCap (90,355,507,200) / sharesOutstanding (2,152,346,530) = 41.98 -
+# i.e. marketCap is ALREADY (price-in-pounds x shares), and
+# trailingEps=2.91 / bookValue=21.472 / dividendRate=2.45 are all
+# obviously pounds too (a 2.45-PENCE dividend on a GBP41.98 share would be
+# a 0.06% yield, not BAT's real ~5.9% - `dividendYield`=5.88 confirms
+# pounds). Every ratio Yahoo computes itself (trailingPE, priceToBook,
+# dividendYield, ...) is already correct - Yahoo uses its own
+# consistently-scaled numbers internally before exposing the ratio; only
+# the raw quote-tick fields need correcting here.
+#
+# Left uncorrected, anything that compares price against a per-share
+# fundamental - see intrinsic_value.py's `price / (1 + gap_pct / 100)`
+# recovery, or valuation.py's `_shares_outstanding_approx` (market_cap /
+# price) - is off by a factor of ~100. A DCF basis built on EPS/book
+# value (already in pounds) gets compared against a price still in pence,
+# producing "massively overvalued" when the real picture is close to fair
+# value or even undervalued; a per-share revenue/FCF basis gets its
+# implied share count inflated ~100x, understating per-share revenue/FCF
+# by the same factor.
+#
+# This is a FIXED, universal 100:1 subunit convention (100 pence = 1
+# pound), not a live FX conversion - unlike valuation.py's `currency !=
+# financial_currency` guard on the revenue/fcf bases, which exists for a
+# genuinely different reporting currency (e.g. Mondi plc trades in GBp on
+# the LSE but reports financials in EUR) that this codebase has no FX
+# rate to convert. Relabeling "GBp"/"GBX" to "GBP" here, before anything
+# else sees it, is what lets that other guard work as intended for a
+# GBP-financial-currency UK stock too, instead of spuriously tripping on
+# "GBp" != "GBP" as a plain string mismatch.
+_PENCE_CURRENCIES = frozenset({"GBp", "GBX"})
+
+
+def _normalize_pence_quote(
+    currency: str | None, price: float | None, year_low: float | None, year_high: float | None
+) -> tuple[str | None, float | None, float | None, float | None]:
+    """(currency, price, year_low, year_high) with a pence quote converted
+    to pounds and relabeled "GBP" - unchanged for anything else. Case-
+    sensitive on purpose: "GBp" (pence) and "GBP" (pounds) differ only in
+    the case of that last letter, so folding case here would erase the
+    only signal there is.
+    """
+    if currency not in _PENCE_CURRENCIES:
+        return currency, price, year_low, year_high
+    to_pounds = lambda v: v / 100 if v is not None else None  # noqa: E731
+    return "GBP", to_pounds(price), to_pounds(year_low), to_pounds(year_high)
+
+
 def resolve_ticker(ticker: str) -> str:
     """Bare symbol -> the symbol Yahoo actually recognizes (e.g. "NESN" ->
     "NESN.SW"), via yf.Search's top EQUITY match. Returns the original
@@ -133,14 +187,20 @@ def _has_price(info: dict) -> bool:
 
 
 def _to_data(symbol: str, info: dict) -> FundamentalsData:
+    currency, price, year_low, year_high = _normalize_pence_quote(
+        info.get("currency"),
+        _clean(info.get("currentPrice") or info.get("regularMarketPrice")),
+        _clean(info.get("fiftyTwoWeekLow")),
+        _clean(info.get("fiftyTwoWeekHigh")),
+    )
     return FundamentalsData(
         symbol=symbol,
         company_name=info.get("shortName") or info.get("longName"),
         sector=info.get("sector"),
         industry=info.get("industry"),
-        currency=info.get("currency"),
+        currency=currency,
         financial_currency=info.get("financialCurrency"),
-        price=_clean(info.get("currentPrice") or info.get("regularMarketPrice")),
+        price=price,
         market_cap=_clean(info.get("marketCap")),
         pe_trailing=_clean(info.get("trailingPE")),
         pe_forward=_clean(info.get("forwardPE")),
@@ -166,8 +226,8 @@ def _to_data(symbol: str, info: dict) -> FundamentalsData:
         dividend_yield=_clean(info.get("dividendYield")),
         dividend_rate=_clean(info.get("dividendRate") or info.get("trailingAnnualDividendRate")),
         payout_ratio=_clean(info.get("payoutRatio")),
-        year_low=_clean(info.get("fiftyTwoWeekLow")),
-        year_high=_clean(info.get("fiftyTwoWeekHigh")),
+        year_low=year_low,
+        year_high=year_high,
     )
 
 

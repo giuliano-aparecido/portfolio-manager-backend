@@ -88,6 +88,30 @@ def test_unavailable_when_the_model_has_no_usable_basis():
     assert "applicable" in result["reason"].lower()
 
 
+def test_unavailable_when_price_and_financial_currency_genuinely_differ():
+    # Mondi plc: GBP-quoted on the LSE (after yahoo_provider.py's own
+    # pence-to-pounds normalization), EUR financials - a real cross-
+    # currency case with no FX rate wired into this module. Every basis
+    # (eps/dividends/fcf/revenue) compares a financial_currency-denominated
+    # per-share figure against a currency-denominated price, so all of
+    # them must decline rather than silently mix currencies. Confirmed
+    # live 2026-09-24: before this guard covered eps/dividends too, this
+    # exact shape produced a confidently wrong "overvalued by >150%".
+    result = assess_intrinsic_value(
+        _data(currency="GBP", financial_currency="EUR"),
+        "MNDI",
+    )
+    assert result["available"] is False
+    assert "applicable" in result["reason"].lower()
+
+
+def test_available_when_currency_and_financial_currency_match():
+    # The same-currency case must still work - the guard shouldn't
+    # over-fire just because both fields are populated.
+    result = assess_intrinsic_value(_data(currency="GBP", financial_currency="GBP"), "SAMECCY")
+    assert result["available"] is True
+
+
 def test_vendored_valuation_module_exposes_its_public_entry_point():
     assert callable(valuation.valuation_assessment_for)
     block, gap = valuation.valuation_assessment_for(_data().to_payload(), ticker="TEST")

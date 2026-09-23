@@ -632,6 +632,27 @@ def cash_flow_basis_value(basis: str, fundamentals: dict) -> float | None:
     which renders it as "Not applicable", the same fail-soft convention
     the old Graham Number implementation used for negative EPS/book value.
     """
+    # eps_trailing/dividend_rate/total_revenue/free_cash_flow are all
+    # reported in financial_currency, but every basis below ends up
+    # compared against `price` (see valuation_block_for's gap_pct), which
+    # is in the TRADING currency - confirmed live these can differ for a
+    # company cross-listed on an exchange denominated in a different
+    # currency than it reports in (Mondi plc: GBP-quoted on the LSE, EUR
+    # financials). No FX-rate source is wired into this module, so rather
+    # than show a number silently off by an unknown FX rate, EVERY basis
+    # here is unusable when the two currencies differ - same fail-soft
+    # "Not applicable" convention as every other unusable-input case in
+    # this module. This is distinct from (and applied AFTER) the
+    # yfinance-specific pence/pound subunit fix in yahoo_provider.py's
+    # `_normalize_pence_quote`, which relabels "GBp"/"GBX" to "GBP" before
+    # fundamentals ever reach this module - so a GBP-financial-currency UK
+    # stock quoted in pence correctly passes this check, while a genuine
+    # cross-currency case like Mondi's correctly does not.
+    currency = fundamentals.get("currency")
+    financial_currency = fundamentals.get("financial_currency")
+    if currency and financial_currency and currency != financial_currency:
+        return None
+
     if basis == "eps":
         eps_trailing = fundamentals.get("eps_trailing")
         pe_trailing = fundamentals.get("pe_trailing")
@@ -673,19 +694,6 @@ def cash_flow_basis_value(basis: str, fundamentals: dict) -> float | None:
 
     shares = _shares_outstanding_approx(fundamentals.get("market_cap"), fundamentals.get("price"))
     if not shares:
-        return None
-    # total_revenue/free_cash_flow are reported in financial_currency,
-    # while shares (derived from market_cap/price, both TRADING-currency
-    # figures) implicitly assumes the same currency - confirmed live these
-    # can differ for a company cross-listed on an exchange denominated in
-    # a different currency than it reports in. No FX-rate source is wired
-    # into this module, so rather than show a number silently off by an
-    # unknown FX rate, these two bases are treated as unusable here - same
-    # fail-soft "Not applicable" convention as every other unusable-input
-    # case in this module.
-    currency = fundamentals.get("currency")
-    financial_currency = fundamentals.get("financial_currency")
-    if currency and financial_currency and currency != financial_currency:
         return None
     if basis == "revenue":
         revenue = fundamentals.get("total_revenue")
