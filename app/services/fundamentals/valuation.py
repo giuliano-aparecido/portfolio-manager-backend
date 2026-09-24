@@ -633,6 +633,12 @@ def cash_flow_basis_value(basis: str, fundamentals: dict) -> float | None:
     the old Graham Number implementation used for negative EPS/book value.
     """
     if basis == "eps":
+        # eps_trailing/dividend_rate (below) are yfinance's own per-share
+        # stock statistics, already expressed in the trading currency
+        # regardless of financial_currency - see git log for this
+        # function, reverted after live-testing showed the opposite
+        # assumption silently broke every ADR. Unlike revenue/fcf further
+        # down, they're never gated on a currency mismatch.
         eps_trailing = fundamentals.get("eps_trailing")
         pe_trailing = fundamentals.get("pe_trailing")
         pe_forward = fundamentals.get("pe_forward")
@@ -678,11 +684,7 @@ def cash_flow_basis_value(basis: str, fundamentals: dict) -> float | None:
     # financial_currency, while shares (market_cap/price) is a TRADING-
     # currency figure - unusable, same fail-soft convention as elsewhere
     # in this module, when the two currencies differ and no FX rate is
-    # available. eps_trailing/dividend_rate are NOT gated the same way:
-    # they're yfinance's own per-share stock statistics, already expressed
-    # in the trading currency regardless of financial_currency (see git
-    # log for this function - reverted after live-testing showed the
-    # opposite assumption silently broke every ADR).
+    # available.
     currency = fundamentals.get("currency")
     financial_currency = fundamentals.get("financial_currency")
     if currency and financial_currency and currency != financial_currency:

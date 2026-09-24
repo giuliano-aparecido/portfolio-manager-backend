@@ -89,12 +89,8 @@ def test_unavailable_when_the_model_has_no_usable_basis():
 
 
 def test_revenue_and_fcf_bases_unavailable_when_price_and_financial_currency_genuinely_differ():
-    # total_revenue/free_cash_flow ARE genuinely reported in
-    # financial_currency (company-total figures straight from the
-    # financial statements), so a real cross-currency case with no FX rate
-    # wired into this module (e.g. Mondi plc: GBP-quoted on the LSE, EUR
-    # financials) must decline these two bases rather than silently divide
-    # a EUR total by a GBP-derived share count.
+    # See cash_flow_basis_value's own comment. Mondi plc (GBP-quoted on
+    # the LSE, EUR financials) is a real example of this mismatch.
     fundamentals = {"total_revenue": 4.0e11, "market_cap": 3.0e12, "price": 300.0}
     assert valuation.cash_flow_basis_value(
         "revenue", {**fundamentals, "currency": "GBP", "financial_currency": "EUR"}

@@ -88,39 +88,26 @@ def _num(value: object) -> float | None:
         return None
 
 
-# Yahoo quotes LSE-listed securities' price ticks in pence ("GBp"), while
-# every other numeric field on the same `.info` response - market cap,
-# EPS, book value, dividend rate, revenue, FCF - is already in pounds.
-# Uncorrected, any per-share math derived from market_cap/price (see
-# valuation.py's `_shares_outstanding_approx`) is off by ~100x - a DCF
-# basis built on EPS/book value gets compared against a price still in
-# pence, and a revenue/FCF basis gets its implied share count deflated
-# ~100x, inflating per-share revenue/FCF by the same factor. Relabeling
-# to "GBP" here also lets valuation.py's `currency != financial_currency`
-# guard work for a GBP-financial-currency UK stock, instead of tripping
-# on "GBp" != "GBP" as a plain string mismatch.
-#
-# price_service.py's `_fetch_current_price_uncached` has the identical
-# "GBp" check for live quotes (a separate pipeline, not shared code) -
-# keep both in sync if Yahoo's convention ever changes.
-#
-# "GBX" was included here in an earlier version as a guessed alternate
-# spelling; checked live against 20+ real LSE tickers and yfinance never
-# returns it, only "GBp" - removed rather than keep unverified handling
-# for a case that doesn't occur. Other exchanges with a similar
-# minor-subunit convention (Johannesburg's ZAc, Tel Aviv's ILA) aren't
-# covered either, for the same reason - only added once confirmed live.
+# GBX doesn't occur in practice - don't re-add without re-verifying (an
+# earlier version guessed it as an alternate spelling of pence; only
+# "GBp" is ever actually returned).
 _PENCE_CURRENCIES = frozenset({"GBp"})
 
 
 def _normalize_pence_quote(
     *, currency: str | None, price: float | None, year_low: float | None, year_high: float | None
 ) -> tuple[str | None, float | None, float | None, float | None]:
-    """(currency, price, year_low, year_high) with a pence quote converted
-    to pounds and relabeled "GBP" - unchanged for anything else. Case-
-    sensitive on purpose: "GBp" (pence) and "GBP" (pounds) differ only in
-    the case of that last letter, so folding case here would erase the
-    only signal there is.
+    """(currency, price, year_low, year_high) with a "GBp" quote converted
+    from pence to pounds - every other numeric field on the same `.info`
+    response (market cap, EPS, book value, dividend rate, revenue, FCF)
+    is already in pounds, so left uncorrected, per-share math derived
+    from market_cap/price (see valuation.py's `_shares_outstanding_approx`)
+    is off by ~100x. Relabeling to "GBP" also lets valuation.py's
+    `currency != financial_currency` guard work for a GBP-financial-
+    currency UK stock, instead of tripping on "GBp" != "GBP" as a plain
+    string mismatch. Case-sensitive on purpose: "GBp" (pence) and "GBP"
+    (pounds) differ only in the case of that last letter, so folding case
+    here would erase the only signal there is.
     """
     if currency not in _PENCE_CURRENCIES:
         return currency, price, year_low, year_high
