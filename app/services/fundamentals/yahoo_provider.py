@@ -88,56 +88,33 @@ def _num(value: object) -> float | None:
         return None
 
 
-# Yahoo quotes LSE-listed securities' raw price ticks in PENCE ("GBp" -
-# note the lowercase p, the only thing distinguishing it from "GBP" - or
-# occasionally "GBX"), while every other numeric field on the SAME
-# `.info` response - market cap, EPS, book value, dividend rate, revenue,
-# free cash flow - is already in whole POUNDS, matching the company's own
-# financial-statement currency (`financialCurrency`). Confirmed live
-# 2026-09-24 on BATS.L: currency="GBp", currentPrice=4198.0, but
-# marketCap (90,355,507,200) / sharesOutstanding (2,152,346,530) = 41.98 -
-# i.e. marketCap is ALREADY (price-in-pounds x shares), and
-# trailingEps=2.91 / bookValue=21.472 / dividendRate=2.45 are all
-# obviously pounds too (a 2.45-PENCE dividend on a GBP41.98 share would be
-# a 0.06% yield, not BAT's real ~5.9% - `dividendYield`=5.88 confirms
-# pounds). Every ratio Yahoo computes itself (trailingPE, priceToBook,
-# dividendYield, ...) is already correct - Yahoo uses its own
-# consistently-scaled numbers internally before exposing the ratio; only
-# the raw quote-tick fields need correcting here.
+# Yahoo quotes LSE-listed securities' price ticks in pence ("GBp"), while
+# every other numeric field on the same `.info` response - market cap,
+# EPS, book value, dividend rate, revenue, FCF - is already in pounds.
+# Uncorrected, any per-share math derived from market_cap/price (see
+# valuation.py's `_shares_outstanding_approx`) is off by ~100x - a DCF
+# basis built on EPS/book value gets compared against a price still in
+# pence, and a revenue/FCF basis gets its implied share count deflated
+# ~100x, inflating per-share revenue/FCF by the same factor. Relabeling
+# to "GBP" here also lets valuation.py's `currency != financial_currency`
+# guard work for a GBP-financial-currency UK stock, instead of tripping
+# on "GBp" != "GBP" as a plain string mismatch.
 #
-# Left uncorrected, anything that compares price against a per-share
-# fundamental - see intrinsic_value.py's `price / (1 + gap_pct / 100)`
-# recovery, or valuation.py's `_shares_outstanding_approx` (market_cap /
-# price) - is off by a factor of ~100. A DCF basis built on EPS/book
-# value (already in pounds) gets compared against a price still in pence,
-# producing "massively overvalued" when the real picture is close to fair
-# value or even undervalued; a per-share revenue/FCF basis gets its
-# implied share count inflated ~100x, understating per-share revenue/FCF
-# by the same factor.
+# price_service.py's `_fetch_current_price_uncached` has the identical
+# "GBp" check for live quotes (a separate pipeline, not shared code) -
+# keep both in sync if Yahoo's convention ever changes.
 #
-# This is a FIXED, universal 100:1 subunit convention (100 pence = 1
-# pound), not a live FX conversion - unlike valuation.py's `currency !=
-# financial_currency` guard on the revenue/fcf bases, which exists for a
-# genuinely different reporting currency (e.g. Mondi plc trades in GBp on
-# the LSE but reports financials in EUR) that this codebase has no FX
-# rate to convert. Relabeling "GBp"/"GBX" to "GBP" here, before anything
-# else sees it, is what lets that other guard work as intended for a
-# GBP-financial-currency UK stock too, instead of spuriously tripping on
-# "GBp" != "GBP" as a plain string mismatch.
-#
-# Known-incomplete scope, not yet chased: other exchanges quote in a minor
-# subunit the same way London does (Johannesburg's "ZAc"/South African
-# cents, and some Yahoo data for Tel Aviv's "ILA"/agorot both come to
-# mind), and this app's `derive_yahoo_ticker` isn't limited to LSE-style
-# tickers. Not added speculatively - same "extend when a real miss is
-# confirmed live" discipline as this module's other denylists - because a
-# wrong guess at the exact currency code or subunit ratio would be worse
-# than the gap it's meant to close.
-_PENCE_CURRENCIES = frozenset({"GBp", "GBX"})
+# "GBX" was included here in an earlier version as a guessed alternate
+# spelling; checked live against 20+ real LSE tickers and yfinance never
+# returns it, only "GBp" - removed rather than keep unverified handling
+# for a case that doesn't occur. Other exchanges with a similar
+# minor-subunit convention (Johannesburg's ZAc, Tel Aviv's ILA) aren't
+# covered either, for the same reason - only added once confirmed live.
+_PENCE_CURRENCIES = frozenset({"GBp"})
 
 
 def _normalize_pence_quote(
-    currency: str | None, price: float | None, year_low: float | None, year_high: float | None
+    *, currency: str | None, price: float | None, year_low: float | None, year_high: float | None
 ) -> tuple[str | None, float | None, float | None, float | None]:
     """(currency, price, year_low, year_high) with a pence quote converted
     to pounds and relabeled "GBP" - unchanged for anything else. Case-
@@ -200,10 +177,10 @@ def _has_price(info: dict) -> bool:
 
 def _to_data(symbol: str, info: dict) -> FundamentalsData:
     currency, price, year_low, year_high = _normalize_pence_quote(
-        info.get("currency"),
-        _clean(info.get("currentPrice") or info.get("regularMarketPrice")),
-        _clean(info.get("fiftyTwoWeekLow")),
-        _clean(info.get("fiftyTwoWeekHigh")),
+        currency=info.get("currency"),
+        price=_clean(info.get("currentPrice") or info.get("regularMarketPrice")),
+        year_low=_clean(info.get("fiftyTwoWeekLow")),
+        year_high=_clean(info.get("fiftyTwoWeekHigh")),
     )
     return FundamentalsData(
         symbol=symbol,

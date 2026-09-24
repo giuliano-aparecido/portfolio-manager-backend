@@ -674,32 +674,15 @@ def cash_flow_basis_value(basis: str, fundamentals: dict) -> float | None:
     shares = _shares_outstanding_approx(fundamentals.get("market_cap"), fundamentals.get("price"))
     if not shares:
         return None
-    # total_revenue/free_cash_flow are COMPANY-TOTAL figures straight from
-    # the financial statements, reported in financial_currency, while
-    # shares (derived from market_cap/price, both TRADING-currency
-    # figures) implicitly assumes the same currency - confirmed live these
-    # can differ for a company cross-listed on an exchange denominated in
-    # a different currency than it reports in. No FX-rate source is wired
-    # into this module, so rather than show a number silently off by an
-    # unknown FX rate, these two bases are treated as unusable here - same
-    # fail-soft "Not applicable" convention as every other unusable-input
-    # case in this module.
-    #
-    # eps_trailing/dividend_rate are deliberately NOT gated by this check,
-    # unlike an earlier version of this fix: they're yfinance's own PER-
-    # SHARE stock statistics, which - confirmed live across both a direct
-    # dual-currency listing (Mondi: GBP-quoted/EUR-financials - bookValue
-    # and dividendRate both reconcile against the GBP price via Yahoo's
-    # own priceToBook/dividendYield fields, not against EUR) and several
-    # ADRs (BABA/TM/SNY/TSM: USD-quoted, CNY/JPY/EUR/TWD financials -
-    # trailingEps exactly reconciles against trailingPE using the USD
-    # price in every case) - are ALREADY expressed in the TRADING
-    # currency, not financial_currency. Gating them the same way as
-    # revenue/fcf was tried and reverted: it silently nulled out the eps/
-    # dividends bases (this function's own docstring: "already per-share",
-    # i.e. the two MOST reliable bases) for every ADR and cross-listed
-    # stock, based on a currency mismatch that doesn't actually exist for
-    # those two fields.
+    # total_revenue/free_cash_flow are company-total figures reported in
+    # financial_currency, while shares (market_cap/price) is a TRADING-
+    # currency figure - unusable, same fail-soft convention as elsewhere
+    # in this module, when the two currencies differ and no FX rate is
+    # available. eps_trailing/dividend_rate are NOT gated the same way:
+    # they're yfinance's own per-share stock statistics, already expressed
+    # in the trading currency regardless of financial_currency (see git
+    # log for this function - reverted after live-testing showed the
+    # opposite assumption silently broke every ADR).
     currency = fundamentals.get("currency")
     financial_currency = fundamentals.get("financial_currency")
     if currency and financial_currency and currency != financial_currency:

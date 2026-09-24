@@ -119,9 +119,7 @@ def test_to_data_drops_non_numeric_strings_in_numeric_fields():
     assert data.sector == "Technology"  # string fields are untouched
 
 
-# Real BATS.L info (2026-09-24): "currency": "GBp" (pence), but marketCap
-# is already price-in-pounds x shares, and trailingEps/bookValue/
-# dividendRate are all already in whole pounds too.
+# BATS.L pence fixture - see _normalize_pence_quote's comment.
 _GBP_PENCE_INFO = {
     **FULL_INFO,
     "shortName": "British American Tobacco p.l.c.",
@@ -154,10 +152,13 @@ def test_to_data_leaves_a_pound_quote_alone():
     assert data.price == 189.30
 
 
-def test_to_data_converts_gbx_the_same_as_gbp_pence():
+def test_to_data_leaves_gbx_unconverted():
+    # "GBX" isn't a real yfinance currency value (checked live against
+    # 20+ LSE tickers - only "GBp" occurs), so it's deliberately not in
+    # _PENCE_CURRENCIES and must be left alone like any other currency.
     data = _to_data("BATS.L", {**_GBP_PENCE_INFO, "currency": "GBX"})
-    assert data.currency == "GBP"
-    assert data.price == 41.98
+    assert data.currency == "GBX"
+    assert data.price == 4198.0
 
 
 def test_to_data_pence_conversion_is_none_safe_for_a_missing_year_range():
