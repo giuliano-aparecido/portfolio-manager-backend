@@ -1,10 +1,10 @@
 """Builds the `get_ticker_news` agent-tool response (app/schemas/agent.py)
-from the Google News feed client in app/services/news.py. Same split the
+from the news client in app/services/news.py. Same split the
 fundamentals package uses: the feed client knows nothing about the
 database or the response shape, this module joins the two.
 
 Everything here is synchronous and does blocking network I/O (a
-fundamentals lookup for the company name, then one or more RSS fetches) —
+fundamentals lookup for the company name, then news fetches and Gemini calls) —
 the MCP tool wrapping it runs it off the event loop via asyncio.to_thread.
 
 `ticker_news` takes a session FACTORY rather than a session, for two
@@ -17,7 +17,7 @@ reasons, both specific to running in that worker thread:
   would run on the loop while the worker is still issuing statements on
   that connection — and the pool could hand it to another request
   meanwhile. Opening and closing inside the worker keeps one owner.
-- Pool pressure. The escalation can spend up to four 10s RSS requests in
+- Pool pressure. The escalation can spend several network round trips in
   this function while the actual DB work takes milliseconds at the start.
   Holding a pooled connection across all of that would exhaust a default
   pool of 5 under a handful of concurrent questions, on a database shared
@@ -78,7 +78,7 @@ def ticker_news(session_factory: Callable[[], Session], ticker: str, user_id: st
     finally:
         db.close()
 
-    result = fetch_ticker_news(ticker, name=company_name, sector=sector, limit=limit)
+    result = fetch_ticker_news(ticker, name=company_name, sector=sector, limit=limit, yahoo_symbol=yahoo_symbol)
 
     return TickerNews(
         ticker=ticker,

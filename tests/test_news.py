@@ -3,11 +3,15 @@ escalation and ordering, with the network seam stubbed out. No DB, no HTTP.
 """
 
 import datetime
+from types import SimpleNamespace
 
 import pytest
 
+from app.services import news, news_classifier
+from app.services.news_classifier import HeadlineAssessment
 from app.services.news import (
     LOW_QUALITY_PUBLISHERS,
+    NewsItem,
     _company_match_name,
     SEARCH_WINDOWS_DAYS,
     _EVENT_SIGNAL_RE,
@@ -19,6 +23,8 @@ from app.services.news import (
     clear_news_cache,
     fetch_ticker_news,
 )
+
+_REAL_FETCH_YAHOO_NEWS = news._fetch_yahoo_news
 
 
 class FakeFeed:
@@ -610,3 +616,167 @@ def test_limit_is_clamped_to_a_sane_range():
 
     clear_news_cache()
     assert len(fetch_ticker_news("NESN", name="Nestle", sector=None, limit=0, fetch=feeds(many)).items) == 1
+
+
+# --- Gemini screen and Yahoo source ----------------------------------------
+
+
+def classifier(verdicts: dict[str, tuple[bool, int]], calls: list | None = None):
+    def classify(company, ticker, sector, headlines):
+        if calls is not None:
+            calls.append([title for title, _ in headlines])
+        return [HeadlineAssessment(*verdicts.get(title, (False, 1))) for title, _ in headlines]
+
+    return classify
+
+
+def yahoo_item(title: str, published: datetime.date | None, publisher: str = "Yahoo Finance") -> NewsItem:
+    return NewsItem(title=title, publisher=publisher, published_date=published, link="https://finance.yahoo.com/a")
+
+
+def test_the_classifier_decides_what_is_kept_and_ranks_by_importance(monkeypatch):
+    monkeypatch.setattr(news_classifier, "classify_headlines", classifier({
+        "Novo Sets Long-Term Targets": (True, 4),
+        "Novo Nordisk wins FDA approval": (True, 5),
+        "Novo Banco reports profit": (False, 5),
+        "Should you buy Novo Nordisk?": (True, 1),
+    }))
+    fetch = feeds([
+        entry("Novo Sets Long-Term Targets - Reuters", published=TODAY),
+        entry("Novo Nordisk wins FDA approval - Reuters", published=TODAY - datetime.timedelta(days=3)),
+        entry("Novo Banco reports profit - Reuters", published=TODAY),
+        entry("Should you buy Novo Nordisk? - Motley Fool", published=TODAY),
+    ])
+    result = fetch_ticker_news("NVO", name="Novo Nordisk A/S", sector="Healthcare", fetch=fetch)
+
+    assert [i.title for i in result.items] == ["Novo Nordisk wins FDA approval", "Novo Sets Long-Term Targets"]
+
+
+def test_a_denylisted_publisher_is_no_gate_once_the_classifier_answers(monkeypatch):
+    monkeypatch.setattr(news_classifier, "classify_headlines", classifier({"Novo Sets Long-Term Targets": (True, 4)}))
+    fetch = feeds([entry("Novo Sets Long-Term Targets - TIKR.com", published=TODAY)])
+    result = fetch_ticker_news("NVO", name="Novo Nordisk A/S", sector=None, fetch=fetch)
+
+    assert [i.publisher for i in result.items] == ["TIKR.com"]
+
+
+def test_a_failed_classifier_is_not_retried_in_wider_windows(monkeypatch):
+    calls: list = []
+
+    def failing(company, ticker, sector, headlines):
+        calls.append(headlines)
+        return None
+
+    monkeypatch.setattr(news_classifier, "classify_headlines", failing)
+    fetch = feeds(
+        [entry("Should You Buy Nestle Stock? - Motley Fool", published=TODAY)],
+        [entry(GOOD, published=TODAY)],
+    )
+    result = fetch_ticker_news("NESN", name="Nestle", sector=None, fetch=fetch)
+
+    assert len(calls) == 1
+    assert result.window_days == SEARCH_WINDOWS_DAYS[1]
+    assert [i.publisher for i in result.items] == ["Reuters"]
+
+
+def test_equal_importance_is_ranked_newest_first(monkeypatch):
+    monkeypatch.setattr(news_classifier, "classify_headlines", classifier({
+        "Novo cuts prices": (True, 3),
+        "Novo opens a plant": (True, 3),
+    }))
+    fetch = feeds([
+        entry("Novo cuts prices - Reuters", published=TODAY - datetime.timedelta(days=2)),
+        entry("Novo opens a plant - Reuters", published=TODAY),
+    ])
+    result = fetch_ticker_news("NVO", name="Novo Nordisk A/S", sector=None, fetch=fetch)
+
+    assert [i.title for i in result.items] == ["Novo opens a plant", "Novo cuts prices"]
+
+
+def test_nothing_kept_by_the_classifier_widens_the_window(monkeypatch):
+    monkeypatch.setattr(news_classifier, "classify_headlines", classifier({"Novo Nordisk wins FDA approval": (True, 5)}))
+    fetch = feeds(
+        [entry("Novo Banco reports profit - Reuters", published=TODAY)],
+        [entry("Novo Nordisk wins FDA approval - Reuters", published=TODAY)],
+    )
+    result = fetch_ticker_news("NVO", name="Novo Nordisk A/S", sector=None, fetch=fetch)
+
+    assert result.window_days == SEARCH_WINDOWS_DAYS[1]
+
+
+def test_yahoo_headlines_join_the_candidates_deduped_against_google(monkeypatch):
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    calls: list = []
+    monkeypatch.setattr(news_classifier, "classify_headlines", classifier({
+        "Novo Sets Long-Term Targets": (True, 4),
+        "Novo Nordisk Stock Slides After Unveiling Long Term Pipeline Growth Targets": (True, 4),
+    }, calls))
+    monkeypatch.setattr(news, "_fetch_yahoo_news", lambda symbol: [
+        yahoo_item("Novo Nordisk Stock Slides After Unveiling Long Term Pipeline Growth Targets", today),
+        yahoo_item("novo sets long-term targets", today),
+    ])
+    fetch = feeds([entry("Novo Sets Long-Term Targets - Reuters", published=today)])
+    result = fetch_ticker_news("NVO", name="Novo Nordisk A/S", sector=None, fetch=fetch, yahoo_symbol="NVO")
+
+    assert calls[0] == [
+        "Novo Sets Long-Term Targets",
+        "Novo Nordisk Stock Slides After Unveiling Long Term Pipeline Growth Targets",
+    ]
+    assert len(result.items) == 2
+
+
+def test_yahoo_headlines_outside_the_window_are_left_for_a_wider_one(monkeypatch):
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    calls: list = []
+    monkeypatch.setattr(news_classifier, "classify_headlines", classifier({"Novo old result": (True, 5)}, calls))
+    monkeypatch.setattr(news, "_fetch_yahoo_news", lambda symbol: [
+        yahoo_item("Novo old result", today - datetime.timedelta(days=20)),
+    ])
+    result = fetch_ticker_news("NVO", name="Novo Nordisk A/S", sector=None, fetch=feeds(), yahoo_symbol="NVO")
+
+    assert calls == [["Novo old result"]]
+    assert result.window_days == 30
+
+
+def test_yahoo_is_not_queried_without_a_symbol(monkeypatch):
+    def fail(symbol):
+        raise AssertionError("must not be called")
+
+    monkeypatch.setattr(news, "_fetch_yahoo_news", fail)
+    result = fetch_ticker_news("NESN", name="Nestle", sector=None, fetch=feeds([entry(GOOD, published=TODAY)]))
+
+    assert result.status == "ok"
+
+
+def test_yahoo_news_is_parsed_from_the_content_payload(monkeypatch):
+    payload = [
+        {"content": {
+            "title": "Novo Sets Long-Term Targets",
+            "pubDate": "2026-09-23T14:05:00Z",
+            "provider": {"displayName": "Barrons.com"},
+            "canonicalUrl": {"url": "https://www.barrons.com/a"},
+        }},
+        {"content": {"title": "", "pubDate": "2026-09-23T14:05:00Z"}},
+        {"content": {"title": "No provider", "pubDate": "not a date", "clickThroughUrl": {"url": "http://x"}}},
+    ]
+    monkeypatch.setattr(news.yf, "Ticker", lambda symbol: SimpleNamespace(news=payload))
+
+    assert _REAL_FETCH_YAHOO_NEWS("NVO") == [
+        NewsItem("Novo Sets Long-Term Targets", "Barrons.com", datetime.date(2026, 9, 23), "https://www.barrons.com/a"),
+        NewsItem("No provider", "Yahoo Finance", None, ""),
+    ]
+
+
+def test_a_yahoo_failure_yields_no_items(monkeypatch):
+    def boom(symbol):
+        raise RuntimeError("crumb")
+
+    monkeypatch.setattr(news.yf, "Ticker", boom)
+
+    assert _REAL_FETCH_YAHOO_NEWS("NVO") == []
+
+
+def test_a_malformed_yahoo_payload_yields_no_items(monkeypatch):
+    monkeypatch.setattr(news.yf, "Ticker", lambda symbol: SimpleNamespace(news=["not a dict"]))
+
+    assert _REAL_FETCH_YAHOO_NEWS("NVO") == []
