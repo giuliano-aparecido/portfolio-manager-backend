@@ -10,6 +10,7 @@ from app.services.news import (
     LOW_QUALITY_PUBLISHERS,
     _company_match_name,
     SEARCH_WINDOWS_DAYS,
+    _EVENT_SIGNAL_RE,
     _is_low_content_headline,
     _is_low_quality_publisher,
     _is_relevant_headline,
@@ -142,6 +143,75 @@ def test_event_headlines_are_never_dropped_as_move_reports(title):
 @pytest.mark.parametrize(
     "title",
     [
+        # Past-tense verb forms - see _EVENT_SIGNAL_RE's comment.
+        "Nestle stock falls after it reported weaker sales",
+        "Nestle stock falls after it posted weaker sales",
+        "Nestle stock falls after it missed sales targets",
+        "Nestle stock falls as it declared a special dividend",
+        "Nestle stock falls as it divested a subsidiary",
+        "Nestle stock falls as it appointed a new finance chief",
+        "Nestle stock falls after regulators approved a rival drug",
+        "Nestle stock falls after it was sued by a former supplier",
+        "Nestle stock falls as regulators are fining the company",
+    ],
+)
+def test_event_headlines_in_past_tense_are_never_dropped_as_move_reports(title):
+    assert not _is_low_content_headline(title)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # "sold"/"selling" without a determiner must not trigger the
+        # override - see _EVENT_SIGNAL_RE's comment.
+        "Nestle shares are sold off after weak guidance",
+        "Nestle stock is selling off sharply today",
+        "Nestle shares selling off after weak guidance",
+        # An unrelated segment mention nearby must not rescue these either.
+        "Shares sold off as retail division slips",
+        "Tech shares sold broadly as chip division slumps",
+        "Bank shares are selling off as trading unit struggles",
+        "Retailer shares sold off as e-commerce arm underperforms",
+        # Present-tense "sell(s) off" is the same price-action idiom -
+        # confirmed live 2026-09-24, an earlier version left "sells?" bare
+        # and unscoped, so it wrongly rescued exactly this shape.
+        "Nestle shares sell off sharply after weak guidance",
+        "The stock sells off as investors flee",
+    ],
+)
+def test_bare_sold_or_selling_does_not_trigger_the_event_override(title):
+    # These aren't rejected by the move-report tier today either (no
+    # existing pattern treats "sold off" as a price move), so this only
+    # guards the override itself: it must not fire on price action alone.
+    assert not _EVENT_SIGNAL_RE.search(title)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # A real divestiture (any object noun) must still override tier 2.
+        "Nestle stock falls despite selling its water business",
+        "Nestle stock rises after it sold its stake in a JV",
+        "Nestle stock falls as it sold its operations in Brazil",
+        "Nestle stock falls as it sold its subsidiary in China",
+        "Nestle stock falls as it is selling its manufacturing plant",
+        "Nestle stock gains as it sells its shares in a joint venture",
+        "Nestle stock falls as it sells non-core assets",
+        # "sold/selling off its X" - a real divestiture phrased with the
+        # phrasal "off" still present. Confirmed live 2026-09-24: an
+        # earlier version required the determiner immediately after the
+        # verb, so the intervening "off" defeated the match.
+        "Nestle stock falls as it sold off its water business",
+        "Nestle stock falls as it is selling off its manufacturing plant",
+    ],
+)
+def test_a_scoped_divestiture_still_triggers_the_event_override(title):
+    assert not _is_low_content_headline(title)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
         # The same defect as above, second instance: a first pass at
         # covering 13F spam rejected these too. They sit in the HARD
         # reject tier, where _EVENT_SIGNAL_RE structurally cannot rescue
@@ -210,6 +280,28 @@ def test_a_real_publisher_is_not_denylisted(publisher):
 )
 def test_fund_filing_spam_is_rejected(title):
     assert _is_low_content_headline(title)
+
+
+def test_relevance_matches_a_name_whose_legal_suffix_contains_a_slash():
+    # Regression test for the Danish "A/S" legal-suffix slash - see
+    # _company_match_name's docstring.
+    assert _is_relevant_headline(
+        "NVO", "Novo Nordisk A/S", "Healthcare",
+        "Novo Nordisk Stock Slides After Unveiling Long Term Pipeline Growth Targets",
+    )
+
+
+def test_slash_in_a_headline_does_not_merge_two_names_into_one_token():
+    # Regression test for _normalize_for_match's slash-preservation
+    # contract - see its docstring.
+    assert _is_relevant_headline("BIDU", "Baidu", "Technology", "Baidu/Alibaba race for AI dominance")
+
+
+def test_low_content_headline_does_not_reject_a_gerund_event_lede():
+    # Gerund verb form - see _EVENT_SIGNAL_RE's comment.
+    assert not _is_low_content_headline(
+        "Novo Nordisk Stock Slides After Unveiling Long Term Pipeline Growth Targets"
+    )
 
 
 def test_relevance_matches_company_name_case_insensitively():

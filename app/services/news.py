@@ -267,22 +267,30 @@ _MOVE_REPORT_RE = re.compile(
 # Deliberately excludes soft words a pure price story also uses
 # ("outlook", "margins", "investors", "analysts"), or the override would
 # swallow the whole filter.
+#
 _EVENT_SIGNAL_RE = re.compile(
-    r"\b(?:announce(?:s|d)?|unveil(?:s|ed)?|launch(?:es|ed)?|"
+    r"\b(?:announc(?:e|es|ed|ing)|unveil(?:s|ed|ing)?|launch(?:es|ed|ing)?|"
     r"acquir(?:e|es|ed|ing)|acquisition|merger|takeover|bid for|"
-    r"buyback|repurchase|spin-?off|split|divest|sells?|sale of|"
-    r"wins?|won|awarded|contract|deal|partnership|stake|activist|"
-    r"lawsuit|sues?|settl(?:es|ed|ement)|ruling|probe|"
-    r"investigation|fined?|recall|approval|approves?|fda|clinical|"
-    r"ceo|chief executive|chairman|resigns?|steps? down|appoints?|"
-    r"names?|job cuts|layoffs?|cuts? [\d,]+|restructur\w*|overhaul|"
+    r"buyback|repurchase|spin-?off|split|divest(?:s|ing|ed|iture)?|"
+    # "sell(s)" excludes a following "off" - that's the phrasal verb for
+    # price action ("shares sell off"), not a transaction. "sold"/
+    # "selling" instead require a determiner (an optional "off" first,
+    # for "sold off its X") rather than a bare match, for the same reason.
+    r"sells?(?!\s+off\b)|(?:sold|selling)\s+(?:off\s+)?(?:its|their|a|an|the)\b|"
+    r"sale of|"  # "of" already anchors this to a transaction
+    r"win(?:s|ning)?|won|awarded|contract|deal|partnership|stake|activist|"
+    r"lawsuit|su(?:es?|ing|ed)?|settl(?:es|ed|ement|ing)|ruling|probe|"
+    r"investigation|fin(?:e[sd]?|ing)|recall(?:s|ed|ing)?|approval|approv(?:es?|ing|ed)?|fda|clinical|"
+    r"ceo|chief executive|chairman|resign(?:s|ing|ed)?|steps? down|stepping down|stepped down|"
+    r"appoint(?:s|ing|ed)?|"
+    r"nam(?:es?|ing|ed)|job cuts|layoffs?|cuts? [\d,]+|cutting [\d,]+|restructur\w*|overhaul|"
     # Result VERBS only, never the bare calendar nouns. "earnings" /
     # "results" / "dividend" / "profit" on their own rescue pure price
     # reports that merely name a scheduled event — "IBM stock rises as
     # investors await earnings", "Nestle stock falls on profit taking" —
     # and an awaited event is an anti-event: it hasn't happened yet.
-    r"posts?|reports?|beats?|misses|declares?|"
-    r"upgrade[sd]?|downgrade[sd]?|"
+    r"post(?:s|ing|ed)?|report(?:s|ing|ed)?|beat(?:s|ing)?|miss(?:es|ing|ed)?|declar(?:es?|ing|ed)?|"
+    r"upgrad(?:e|es|ed|ing)|downgrad(?:e|es|ed|ing)|"
     r"strike|factory|tariffs?|sanctions?)\b",
     re.IGNORECASE,
 )
@@ -357,7 +365,16 @@ _LEGAL_SUFFIX_WORDS = frozenset(
 def _normalize_for_match(text: str) -> str:
     """Accents folded, lower-cased, periods and commas dropped, whitespace
     collapsed — applied to BOTH the name and the headline so "Nestlé S.A."
-    and "Nestle SA" compare equal."""
+    and "Nestle SA" compare equal.
+
+    Deliberately leaves "/" alone, unlike "." and ",": a slash in headline
+    text is usually a real word separator ("Baidu/Alibaba race for AI
+    dominance"), and dropping it would merge the two sides into one token
+    and break the `\\b` word-boundary match on either name — only a
+    legal-entity suffix like "A/S" needs the slash removed, and that's
+    handled locally in _company_match_name instead, where it can't affect
+    headline text.
+    """
     folded = unicodedata.normalize("NFKD", text)
     folded = "".join(c for c in folded if not unicodedata.combining(c))
     folded = folded.lower().replace(".", "").replace(",", "")
@@ -371,6 +388,11 @@ def _company_match_name(name: str) -> str:
     positiving on ordinary words), in which case the caller falls back to
     the full normalized name.
 
+    Each end's word is also compared with internal "/" removed before the
+    _LEGAL_SUFFIX_WORDS lookup, so a Danish "A/S" suffix (left intact by
+    _normalize_for_match, see its own docstring) still matches the "as"
+    entry.
+
     Known limitation, deliberately not chased: a name that carries its
     brand AFTER the suffix ("Petroleo Brasileiro S.A. - Petrobras") keeps
     the whole string and won't match a "Petrobras ..." headline on this
@@ -380,9 +402,9 @@ def _company_match_name(name: str) -> str:
     # Both ends: yfinance reports "The Coca-Cola Company" / "The Home
     # Depot, Inc.", and stripping only the tail leaves "the coca-cola",
     # which never appears in a headline that writes "Coca-Cola".
-    while words and words[0] in _LEGAL_SUFFIX_WORDS:
+    while words and words[0].replace("/", "") in _LEGAL_SUFFIX_WORDS:
         words.pop(0)
-    while words and words[-1] in _LEGAL_SUFFIX_WORDS:
+    while words and words[-1].replace("/", "") in _LEGAL_SUFFIX_WORDS:
         words.pop()
     core = " ".join(words)
     return core if len(core) >= 3 else ""
