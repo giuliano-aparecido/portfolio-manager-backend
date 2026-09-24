@@ -633,6 +633,12 @@ def cash_flow_basis_value(basis: str, fundamentals: dict) -> float | None:
     the old Graham Number implementation used for negative EPS/book value.
     """
     if basis == "eps":
+        # eps_trailing/dividend_rate (below) are yfinance's own per-share
+        # stock statistics, already expressed in the trading currency
+        # regardless of financial_currency - see git log for this
+        # function, reverted after live-testing showed the opposite
+        # assumption silently broke every ADR. Unlike revenue/fcf further
+        # down, they're never gated on a currency mismatch.
         eps_trailing = fundamentals.get("eps_trailing")
         pe_trailing = fundamentals.get("pe_trailing")
         pe_forward = fundamentals.get("pe_forward")
@@ -674,15 +680,11 @@ def cash_flow_basis_value(basis: str, fundamentals: dict) -> float | None:
     shares = _shares_outstanding_approx(fundamentals.get("market_cap"), fundamentals.get("price"))
     if not shares:
         return None
-    # total_revenue/free_cash_flow are reported in financial_currency,
-    # while shares (derived from market_cap/price, both TRADING-currency
-    # figures) implicitly assumes the same currency - confirmed live these
-    # can differ for a company cross-listed on an exchange denominated in
-    # a different currency than it reports in. No FX-rate source is wired
-    # into this module, so rather than show a number silently off by an
-    # unknown FX rate, these two bases are treated as unusable here - same
-    # fail-soft "Not applicable" convention as every other unusable-input
-    # case in this module.
+    # total_revenue/free_cash_flow are company-total figures reported in
+    # financial_currency, while shares (market_cap/price) is a TRADING-
+    # currency figure - unusable, same fail-soft convention as elsewhere
+    # in this module, when the two currencies differ and no FX rate is
+    # available.
     currency = fundamentals.get("currency")
     financial_currency = fundamentals.get("financial_currency")
     if currency and financial_currency and currency != financial_currency:

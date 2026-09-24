@@ -88,6 +88,36 @@ def test_unavailable_when_the_model_has_no_usable_basis():
     assert "applicable" in result["reason"].lower()
 
 
+def test_revenue_and_fcf_bases_unavailable_when_price_and_financial_currency_genuinely_differ():
+    # See cash_flow_basis_value's own comment. Mondi plc (GBP-quoted on
+    # the LSE, EUR financials) is a real example of this mismatch.
+    fundamentals = {"total_revenue": 4.0e11, "market_cap": 3.0e12, "price": 300.0}
+    assert valuation.cash_flow_basis_value(
+        "revenue", {**fundamentals, "currency": "GBP", "financial_currency": "EUR"}
+    ) is None
+    assert valuation.cash_flow_basis_value(
+        "fcf", {**fundamentals, "free_cash_flow": 1.0e11, "currency": "GBP", "financial_currency": "EUR"}
+    ) is None
+
+
+def test_eps_and_dividends_bases_available_despite_a_currency_mismatch():
+    # eps/dividends bypass the currency guard in cash_flow_basis_value -
+    # see that function's own comment for why.
+    assert valuation.cash_flow_basis_value(
+        "eps", {"eps_trailing": 8.71, "currency": "USD", "financial_currency": "CNY"}
+    ) == 8.71
+    assert valuation.cash_flow_basis_value(
+        "dividends", {"dividend_rate": 2.12, "currency": "USD", "financial_currency": "JPY"}
+    ) == 2.12
+
+
+def test_available_when_currency_and_financial_currency_match():
+    # The same-currency case must still work - the guard shouldn't
+    # over-fire just because both fields are populated.
+    result = assess_intrinsic_value(_data(currency="GBP", financial_currency="GBP"), "SAMECCY")
+    assert result["available"] is True
+
+
 def test_vendored_valuation_module_exposes_its_public_entry_point():
     assert callable(valuation.valuation_assessment_for)
     block, gap = valuation.valuation_assessment_for(_data().to_payload(), ticker="TEST")
