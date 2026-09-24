@@ -124,6 +124,15 @@ def _num(value: object) -> float | None:
 # else sees it, is what lets that other guard work as intended for a
 # GBP-financial-currency UK stock too, instead of spuriously tripping on
 # "GBp" != "GBP" as a plain string mismatch.
+#
+# Known-incomplete scope, not yet chased: other exchanges quote in a minor
+# subunit the same way London does (Johannesburg's "ZAc"/South African
+# cents, and some Yahoo data for Tel Aviv's "ILA"/agorot both come to
+# mind), and this app's `derive_yahoo_ticker` isn't limited to LSE-style
+# tickers. Not added speculatively - same "extend when a real miss is
+# confirmed live" discipline as this module's other denylists - because a
+# wrong guess at the exact currency code or subunit ratio would be worse
+# than the gap it's meant to close.
 _PENCE_CURRENCIES = frozenset({"GBp", "GBX"})
 
 
