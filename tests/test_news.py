@@ -172,6 +172,11 @@ def test_event_headlines_in_past_tense_are_never_dropped_as_move_reports(title):
         "Tech shares sold broadly as chip division slumps",
         "Bank shares are selling off as trading unit struggles",
         "Retailer shares sold off as e-commerce arm underperforms",
+        # Present-tense "sell(s) off" is the same price-action idiom -
+        # confirmed live 2026-09-24, an earlier version left "sells?" bare
+        # and unscoped, so it wrongly rescued exactly this shape.
+        "Nestle shares sell off sharply after weak guidance",
+        "The stock sells off as investors flee",
     ],
 )
 def test_bare_sold_or_selling_does_not_trigger_the_event_override(title):
@@ -190,10 +195,14 @@ def test_bare_sold_or_selling_does_not_trigger_the_event_override(title):
         "Nestle stock falls as it sold its operations in Brazil",
         "Nestle stock falls as it sold its subsidiary in China",
         "Nestle stock falls as it is selling its manufacturing plant",
-        # Present-tense "sells" was already bare/unscoped before this
-        # diff and stays that way - it isn't the risky tense.
         "Nestle stock gains as it sells its shares in a joint venture",
         "Nestle stock falls as it sells non-core assets",
+        # "sold/selling off its X" - a real divestiture phrased with the
+        # phrasal "off" still present. Confirmed live 2026-09-24: an
+        # earlier version required the determiner immediately after the
+        # verb, so the intervening "off" defeated the match.
+        "Nestle stock falls as it sold off its water business",
+        "Nestle stock falls as it is selling off its manufacturing plant",
     ],
 )
 def test_a_scoped_divestiture_still_triggers_the_event_override(title):

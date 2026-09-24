@@ -268,22 +268,16 @@ _MOVE_REPORT_RE = re.compile(
 # ("outlook", "margins", "investors", "analysts"), or the override would
 # swallow the whole filter.
 #
-# Every verb here needs its "-ing" and past-tense forms too, not just
-# present tense - a gerund or past-tense lede ("...After Unveiling...",
-# "...it reported weaker sales") is as common a headline shape and was
-# previously missed. "sold"/"selling" (past/gerund only - present-tense
-# "sells" is bare and unscoped, since it isn't the risky one) require a
-# determiner right after the verb ("sold its/a/an/the ...") rather than a
-# maintained object-noun whitelist: "sold off"/"selling off" is a phrasal
-# verb describing price action, not a transaction, and "off" is never a
-# determiner - this excludes it without needing to enumerate every
-# possible transaction object. "sale of" is left bare since "of" already
-# anchors it to a transaction.
 _EVENT_SIGNAL_RE = re.compile(
     r"\b(?:announc(?:e|es|ed|ing)|unveil(?:s|ed|ing)?|launch(?:es|ed|ing)?|"
     r"acquir(?:e|es|ed|ing)|acquisition|merger|takeover|bid for|"
     r"buyback|repurchase|spin-?off|split|divest(?:s|ing|ed|iture)?|"
-    r"sells?|(?:sold|selling)\s+(?:its|their|a|an|the)\b|sale of|"
+    # "sell(s)" excludes a following "off" - that's the phrasal verb for
+    # price action ("shares sell off"), not a transaction. "sold"/
+    # "selling" instead require a determiner (an optional "off" first,
+    # for "sold off its X") rather than a bare match, for the same reason.
+    r"sells?(?!\s+off\b)|(?:sold|selling)\s+(?:off\s+)?(?:its|their|a|an|the)\b|"
+    r"sale of|"  # "of" already anchors this to a transaction
     r"win(?:s|ning)?|won|awarded|contract|deal|partnership|stake|activist|"
     r"lawsuit|su(?:es?|ing|ed)?|settl(?:es|ed|ement|ing)|ruling|probe|"
     r"investigation|fin(?:e[sd]?|ing)|recall(?:s|ed|ing)?|approval|approv(?:es?|ing|ed)?|fda|clinical|"
