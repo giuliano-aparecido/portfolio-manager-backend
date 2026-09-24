@@ -268,43 +268,21 @@ _MOVE_REPORT_RE = re.compile(
 # ("outlook", "margins", "investors", "analysts"), or the override would
 # swallow the whole filter.
 #
-# Every verb here needs its "-ing" form too, not just "-s"/"-ed": a
-# gerund lede ("Novo Nordisk Stock Slides After Unveiling Long Term
-# Pipeline Growth Targets") is as common a headline shape as a finite
-# verb, and a missing "-ing" form means the tier-2 move-report pattern
-# below is never overridden for it. Confirmed live 2026-09-23 — that
-# exact Novo Nordisk headline was silently dropped because
-# "unveil(?:s|ed)?" doesn't match "unveiling".
-#
-# The same gap exists for the PAST tense, and it's just as live: an
-# earnings-reaction headline is at least as often written "Nestle stock
-# falls after it reported weaker sales" as present tense, and
-# "report(?:s|ing)?" (no "-ed") missed it just like "unveil(?:s|ed)?"
-# missed the gerund. Every verb below now covers all three forms it can
-# plausibly appear in. Confirmed live 2026-09-23 against "reported" /
-# "posted" / "missed" / "declared" / "divested" / "appointed" /
-# "approved" / "sued" — each one was silently misclassified as low-content
-# before this fix.
-#
-# "sold"/"selling" (past/gerund only - present-tense "sells" was already
-# bare and unscoped before this file's diff, and isn't the risky one)
-# require a determiner right after the verb ("sold ITS/A/AN/THE ...")
-# rather than a maintained whitelist of divestiture-object nouns: "sell
-# off"/"sold off"/"selling off" is a phrasal verb describing PRICE ACTION
-# itself, not a transaction, and "off" is never a determiner, so this
-# structurally excludes it without needing to know every possible
-# transaction-object noun in advance. Confirmed live 2026-09-23: an
-# earlier version scoped to a fixed noun list (stake/business/division/
-# unit/arm/brand) within an unchecked 20-char gap, which both missed real
-# divestiture headlines using an off-list noun ("sold its operations in
-# Brazil") AND let an unrelated segment mention rescue real price-move
-# spam ("Shares sold off as retail division slips" - "division" within
-# the gap, with no relation to the sale at all). "sale of" is left bare
-# since "of" already anchors it to a transaction, not price action.
+# Every verb here needs its "-ing" and past-tense forms too, not just
+# present tense - a gerund or past-tense lede ("...After Unveiling...",
+# "...it reported weaker sales") is as common a headline shape and was
+# previously missed. "sold"/"selling" (past/gerund only - present-tense
+# "sells" is bare and unscoped, since it isn't the risky one) require a
+# determiner right after the verb ("sold its/a/an/the ...") rather than a
+# maintained object-noun whitelist: "sold off"/"selling off" is a phrasal
+# verb describing price action, not a transaction, and "off" is never a
+# determiner - this excludes it without needing to enumerate every
+# possible transaction object. "sale of" is left bare since "of" already
+# anchors it to a transaction.
 _EVENT_SIGNAL_RE = re.compile(
     r"\b(?:announc(?:e|es|ed|ing)|unveil(?:s|ed|ing)?|launch(?:es|ed|ing)?|"
     r"acquir(?:e|es|ed|ing)|acquisition|merger|takeover|bid for|"
-    r"buyback|repurchase|spin-?off|split|divest(?:s|ing|ed)?|"
+    r"buyback|repurchase|spin-?off|split|divest(?:s|ing|ed|iture)?|"
     r"sells?|(?:sold|selling)\s+(?:its|their|a|an|the)\b|sale of|"
     r"win(?:s|ning)?|won|awarded|contract|deal|partnership|stake|activist|"
     r"lawsuit|su(?:es?|ing|ed)?|settl(?:es|ed|ement|ing)|ruling|probe|"
@@ -417,13 +395,9 @@ def _company_match_name(name: str) -> str:
     the full normalized name.
 
     Each end's word is also compared with internal "/" removed before the
-    _LEGAL_SUFFIX_WORDS lookup — needed for "Novo Nordisk A/S" (Danish,
-    this company's own legal-entity suffix, same role as "Inc."/"plc"):
-    _normalize_for_match deliberately leaves "/" in place (see its own
-    docstring), so the raw word here is "a/s", which never equals the
-    "as" entry in _LEGAL_SUFFIX_WORDS on its own. Confirmed live
-    2026-09-23: without this, the name needle for Novo Nordisk stayed the
-    literal "novo nordisk a/s", which no real headline contains.
+    _LEGAL_SUFFIX_WORDS lookup, so a Danish "A/S" suffix (left intact by
+    _normalize_for_match, see its own docstring) still matches the "as"
+    entry.
 
     Known limitation, deliberately not chased: a name that carries its
     brand AFTER the suffix ("Petroleo Brasileiro S.A. - Petrobras") keeps
@@ -440,30 +414,6 @@ def _company_match_name(name: str) -> str:
         words.pop()
     core = " ".join(words)
     return core if len(core) >= 3 else ""
-
-
-# A general word-frequency check (the wordfreq library) was tried here,
-# splitting a multi-word core into individual words and promoting any
-# word that isn't "ordinary English" (by corpus frequency) to its own
-# needle - meant to let a multi-word name also match press shorthand for
-# it ("Novo Nordisk" -> "Novo") without a maintained per-company alias
-# list. Reverted 2026-09-23: it doesn't separate the risk classes that
-# actually matter. Corpus frequency conflates "common word" with "common
-# NAME" (a person's surname, a place, a generic noun for something this
-# company's name happens to also be a word for), and those are
-# frequently adjacent on the frequency scale - confirmed live: "novo"
-# (3.18, safe - the word this idea existed to catch) and "hathaway"
-# (3.29, Anne Hathaway - a real collision: "Anne Hathaway stuns at movie
-# premiere" would match Berkshire Hathaway's core split on "hathaway"
-# alone) are essentially indistinguishable by this metric, and "depot"
-# (3.95, Home Depot's own second word) sits just under any reasonable
-# cutoff picked from a small validation set, letting "City opens new
-# rail depot" match Home Depot. No threshold closes that gap. This
-# file's own bias is to prefer a false negative over a false positive
-# (see the comment on _company_match_name's docstring for the "Target
-# Corporation" case), and the generic per-word split traded that away for
-# real collisions across ordinary large caps, not just an edge case - so
-# it's gone.
 
 
 def _name_needle(name: str | None) -> str:

@@ -143,11 +143,7 @@ def test_event_headlines_are_never_dropped_as_move_reports(title):
 @pytest.mark.parametrize(
     "title",
     [
-        # Same defect, past tense: the event override had "-s"/"-ing" for
-        # these verbs but not "-ed"/irregular past, which is at least as
-        # common a headline tense for an earnings reaction. Confirmed
-        # live 2026-09-23 - every one of these was silently misclassified
-        # as a pure price-move report before the fix.
+        # Past-tense verb forms - see _EVENT_SIGNAL_RE's comment.
         "Nestle stock falls after it reported weaker sales",
         "Nestle stock falls after it posted weaker sales",
         "Nestle stock falls after it missed sales targets",
@@ -166,19 +162,12 @@ def test_event_headlines_in_past_tense_are_never_dropped_as_move_reports(title):
 @pytest.mark.parametrize(
     "title",
     [
-        # Unlike every other verb in the event override, "sold"/"selling"
-        # is at least as often the PRICE ACTION itself as a corporate
-        # event - a bare match would override tier 2 for exactly the
-        # "moved without saying why" shape it exists to reject. Scoped to
-        # require a determiner right after the verb instead of a noun
-        # whitelist, since "off" is never a determiner.
+        # "sold"/"selling" without a determiner must not trigger the
+        # override - see _EVENT_SIGNAL_RE's comment.
         "Nestle shares are sold off after weak guidance",
         "Nestle stock is selling off sharply today",
         "Nestle shares selling off after weak guidance",
-        # An unrelated business-segment mention near "sold"/"selling" must
-        # not rescue a pure price-move headline either - a first pass at
-        # this fix scoped to a fixed noun list within an unchecked 20-char
-        # gap, which let exactly these through. Confirmed live 2026-09-23.
+        # An unrelated segment mention nearby must not rescue these either.
         "Shares sold off as retail division slips",
         "Tech shares sold broadly as chip division slumps",
         "Bank shares are selling off as trading unit struggles",
@@ -195,12 +184,7 @@ def test_bare_sold_or_selling_does_not_trigger_the_event_override(title):
 @pytest.mark.parametrize(
     "title",
     [
-        # A real divestiture must still override tier 2, regardless of
-        # which object noun follows the determiner - the scoping is on
-        # the determiner, not a maintained noun whitelist. Confirmed live
-        # 2026-09-23: a first pass whitelisting stake/business/division/
-        # unit/arm/brand missed "operations"/"subsidiary" and any other
-        # noun outside that list.
+        # A real divestiture (any object noun) must still override tier 2.
         "Nestle stock falls despite selling its water business",
         "Nestle stock rises after it sold its stake in a JV",
         "Nestle stock falls as it sold its operations in Brazil",
@@ -290,11 +274,8 @@ def test_fund_filing_spam_is_rejected(title):
 
 
 def test_relevance_matches_a_name_whose_legal_suffix_contains_a_slash():
-    # "Novo Nordisk A/S" - the "/" isn't dropped by the accent/period/comma
-    # fold, so "a/s" used to survive as its own token, never match the "as"
-    # entry in _LEGAL_SUFFIX_WORDS, and leave the needle as the literal
-    # "novo nordisk a/s", which no real headline contains. Confirmed live
-    # 2026-09-23.
+    # Regression test for the Danish "A/S" legal-suffix slash - see
+    # _company_match_name's docstring.
     assert _is_relevant_headline(
         "NVO", "Novo Nordisk A/S", "Healthcare",
         "Novo Nordisk Stock Slides After Unveiling Long Term Pipeline Growth Targets",
@@ -302,18 +283,13 @@ def test_relevance_matches_a_name_whose_legal_suffix_contains_a_slash():
 
 
 def test_slash_in_a_headline_does_not_merge_two_names_into_one_token():
-    # _normalize_for_match deliberately leaves "/" alone (only
-    # _company_match_name strips it, and only for a legal-suffix word) -
-    # a slash separating two unrelated names in a headline must still act
-    # as a word boundary.
+    # Regression test for _normalize_for_match's slash-preservation
+    # contract - see its docstring.
     assert _is_relevant_headline("BIDU", "Baidu", "Technology", "Baidu/Alibaba race for AI dominance")
 
 
 def test_low_content_headline_does_not_reject_a_gerund_event_lede():
-    # The tier-2 "stock moved" pattern matches "Stock Slides", but the
-    # tier-1 event override missed it because "unveil(?:s|ed)?" doesn't
-    # match "Unveiling" - the override list only had finite verb forms,
-    # not gerunds. Confirmed live 2026-09-23.
+    # Gerund verb form - see _EVENT_SIGNAL_RE's comment.
     assert not _is_low_content_headline(
         "Novo Nordisk Stock Slides After Unveiling Long Term Pipeline Growth Targets"
     )
