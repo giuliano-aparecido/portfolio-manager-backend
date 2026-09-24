@@ -8,9 +8,16 @@ from app.db.session import engine, get_db
 from app.dependencies.auth import get_authenticated_user_id
 from app.main import app, limiter
 from app.models import User
+from app.services import news, news_classifier
 from app.services.fundamentals.cache import clear_fundamentals_cache
 from app.services.news import clear_news_cache
 from app.services.price_service import clear_quote_cache
+
+
+@pytest.fixture(autouse=True)
+def _no_live_news_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(news_classifier, "classify_headlines", lambda *args, **kwargs: None)
+    monkeypatch.setattr(news, "_fetch_yahoo_news", lambda symbol: [])
 
 
 @pytest.fixture(autouse=True)

@@ -1,4 +1,5 @@
-"""Recent news headlines for one security, from Google News RSS.
+"""Recent news headlines for one security, from Google News RSS plus
+Yahoo's ticker-tagged news.
 
 Ported (not imported) from financial-sentiment-api's
 `app/services/news.py` — the same convention this repo already follows for
@@ -41,8 +42,10 @@ from dataclasses import dataclass, replace
 
 import feedparser
 import httpx
+import yfinance as yf
 
 from app.schemas.agent import NewsStatus
+from app.services import news_classifier
 from app.services.ticker_config import MARKET_YAHOO_SUFFIX
 
 logger = logging.getLogger(__name__)
@@ -74,12 +77,12 @@ _REQUEST_TIMEOUT_SECONDS = 10.0
 _MEM_TTL_SECONDS = 900.0
 _MEM_MAX_ENTRIES = 256
 _mem_lock = threading.Lock()
-# (search ticker, search subject, sector) — deliberately NOT `limit`.
+# (search ticker, search subject, sector, Yahoo symbol) — deliberately NOT `limit`.
 # `limit` is an LLM-chosen tool argument, and keying on it would make a
 # follow-up turn asking for 3 headlines instead of 5 miss a cache entry
 # that already holds them as a superset. The full filtered window is
 # cached; `limit` is applied on read.
-_CacheKey = tuple[str, str, str]
+_CacheKey = tuple[str, str, str, str]
 _mem: dict[_CacheKey, tuple[float, "NewsResult"]] = {}
 
 # Only a real exchange suffix is stripped before a ticker is used for
@@ -567,6 +570,44 @@ def _build_candidates(feed) -> list[NewsItem]:
     return candidates
 
 
+def _fetch_yahoo_news(symbol: str) -> list[NewsItem]:
+    try:
+        items: list[NewsItem] = []
+        for entry in yf.Ticker(symbol).news or []:
+            content = entry.get("content") or {}
+            title = content.get("title")
+            if not title:
+                continue
+            url = (content.get("canonicalUrl") or {}).get("url") or (content.get("clickThroughUrl") or {}).get("url") or ""
+            items.append(
+                NewsItem(
+                    title=title,
+                    publisher=(content.get("provider") or {}).get("displayName") or "Yahoo Finance",
+                    published_date=_parse_iso_date(content.get("pubDate")),
+                    link=_safe_link(url),
+                )
+            )
+        return items
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Yahoo news fetch failed for %s: %s", symbol, exc)
+        return []
+
+
+def _parse_iso_date(value: str | None) -> datetime.date | None:
+    if not value:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+def _within_window(item: NewsItem, window_days: int) -> bool:
+    if item.published_date is None:
+        return True
+    return item.published_date >= datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=window_days)
+
+
 def _safe_link(link: str) -> str:
     """A feed is an external input like any other, and this URL is handed
     to the frontend to render as an anchor — a `javascript:` or `data:`
@@ -576,27 +617,43 @@ def _safe_link(link: str) -> str:
     return link if link.startswith("https://") else ""
 
 
+def _dedupe(candidates: list[NewsItem]) -> list[NewsItem]:
+    seen: set[str] = set()
+    unique: list[NewsItem] = []
+    for candidate in candidates:
+        key = candidate.title.strip().lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique
+
+
 def _meaningful(candidates: list[NewsItem], ticker: str, name: str | None, sector: str | None) -> list[NewsItem]:
-    """Quality filter then relevance filter, deduped by normalized title.
-    Google News returns the same syndicated story under several publishers
-    within one window, and without this a "top 5" is regularly the same
-    headline five times."""
     # Hoisted: the name normalization is identical for every candidate, and
     # this runs over up to CANDIDATE_POOL_SIZE entries per window.
     needle = _name_needle(name)
-    seen: set[str] = set()
-    kept: list[NewsItem] = []
-    for candidate in candidates:
-        if _is_low_quality_publisher(candidate.publisher) or _is_low_content_headline(candidate.title):
-            continue
-        if not _matches_holding(ticker, needle, sector, candidate.title):
-            continue
-        key = candidate.title.strip().lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        kept.append(candidate)
-    return kept
+    return [
+        candidate
+        for candidate in candidates
+        if not _is_low_quality_publisher(candidate.publisher)
+        and not _is_low_content_headline(candidate.title)
+        and _matches_holding(ticker, needle, sector, candidate.title)
+    ]
+
+
+def _classified(
+    candidates: list[NewsItem], ticker: str, name: str | None, sector: str | None
+) -> list[NewsItem] | None:
+    """Kept headlines ranked by importance then recency, or None when the
+    classifier can't answer."""
+    assessments = news_classifier.classify_headlines(
+        name or ticker, ticker, sector, [(c.title, c.publisher) for c in candidates]
+    )
+    if assessments is None:
+        return None
+    kept = [(c, a.importance) for c, a in zip(candidates, assessments) if a.keep]
+    kept.sort(key=lambda ci: (ci[1], ci[0].published_date or datetime.date.min), reverse=True)
+    return [c for c, _ in kept]
 
 
 def _newest_first(items: list[NewsItem]) -> list[NewsItem]:
@@ -615,18 +672,19 @@ def fetch_ticker_news(
     sector: str | None = None,
     limit: int = 5,
     fetch: Callable[[str], object] | None = None,
+    yahoo_symbol: str | None = None,
 ) -> NewsResult:
-    """Up to `limit` recent, meaningful headlines about `ticker`'s company.
+    """Up to `limit` relevant, important headlines about `ticker`'s company,
+    from Google News plus Yahoo's news for `yahoo_symbol` when given.
 
     Widens the search window (SEARCH_WINDOWS_DAYS) until one yields at
-    least one headline passing both the quality and relevance filters, then
-    returns that window's newest `limit`. It does NOT keep widening to pad
-    the list — two genuinely recent headlines beat two recent ones plus
-    three from six months ago.
+    least one headline that news_classifier keeps (or, when it can't
+    answer, that survives _meaningful), then returns that window's best
+    `limit`. It does NOT keep widening to pad the list — two genuinely
+    recent headlines beat two recent ones plus three from six months ago.
 
-    Blocking: does its own synchronous HTTP (one request per window tried,
-    at most len(SEARCH_WINDOWS_DAYS)). Async callers wrap it in
-    asyncio.to_thread.
+    Blocking: does its own synchronous HTTP and Gemini calls. Async callers
+    wrap it in asyncio.to_thread.
     """
     # Resolved here rather than as a default argument so that patching the
     # module attribute (what a test does) actually takes effect.
@@ -635,10 +693,13 @@ def fetch_ticker_news(
     search_ticker = _strip_exchange_suffix(ticker)
     subject = name or search_ticker
 
-    cache_key = (search_ticker, subject, sector or "")
+    cache_key = (search_ticker, subject, sector or "", yahoo_symbol or "")
     cached = _mem_get(cache_key)
     if cached is not None:
         return _limited(cached, limit)
+
+    yahoo_items = _fetch_yahoo_news(yahoo_symbol) if yahoo_symbol else []
+    classifier_available = True
 
     for window_days in SEARCH_WINDOWS_DAYS:
         query = f"{subject} stock earnings financial news when:{window_days}d"
@@ -650,11 +711,17 @@ def fetch_ticker_news(
             # news for the next 15 minutes.
             return NewsResult(items=(), window_days=None, status="error", message="Could not reach the news feed.")
 
-        meaningful = _meaningful(_build_candidates(feed), search_ticker, name, sector)
+        candidates = _dedupe(_build_candidates(feed) + [i for i in yahoo_items if _within_window(i, window_days)])
+        meaningful = None
+        if candidates and classifier_available:
+            meaningful = _classified(candidates, search_ticker, name, sector)
+            classifier_available = meaningful is not None
+        if meaningful is None:
+            meaningful = _newest_first(_meaningful(candidates, search_ticker, name, sector))
         if meaningful:
             # The whole window is cached; `limit` is applied on the way out
             # so a later call with a different limit still hits the entry.
-            result = NewsResult(items=tuple(_newest_first(meaningful)), window_days=window_days, status="ok")
+            result = NewsResult(items=tuple(meaningful), window_days=window_days, status="ok")
             _mem_put(cache_key, result)
             return _limited(result, limit)
 
@@ -669,7 +736,7 @@ def fetch_ticker_news(
         message=f"No meaningful news found for {ticker} in the past {SEARCH_WINDOWS_DAYS[-1]} days.",
     )
     # Cached, unlike the error branch above: "genuinely quiet" is a real
-    # answer, and re-running four RSS fetches per turn to re-derive it is
+    # answer, and re-running four RSS fetches and Gemini calls per turn to re-derive it is
     # exactly what this cache exists to prevent.
     _mem_put(cache_key, result)
     return result
