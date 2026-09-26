@@ -63,3 +63,12 @@ most PaaS, puts the app behind a proxy, so without it every request would
 otherwise share the proxy's own IP and thus one rate-limit bucket for all
 traffic). A request over the limit gets `429 {"error": "Rate limit
 exceeded: ..."}`.
+
+## License
+
+Dual-licensed under either of
+
+- [MIT license](LICENSE-MIT)
+- [Apache License, Version 2.0](LICENSE-APACHE)
+
+at your option.
