@@ -1,5 +1,7 @@
 # Portfolio Manager — Backend
 
+*An experimental project exploring agentic coding workflows with Claude Code.*
+
 A Python/FastAPI backend for a multi-currency investment portfolio tracker
 (FIFO cost basis, live Yahoo Finance pricing, a manual-gain/loss
 passive-investment ledger with recurring deposits), built with SQLAlchemy,
