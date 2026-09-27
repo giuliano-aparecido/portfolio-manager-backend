@@ -11,7 +11,7 @@ Full documentation lives in dedicated files, not duplicated here:
   never push directly to `main`** — see there for the exact workflow,
   the pre-PR test/migration gate, and production-database safety rules
 
-Serves [`portfolio-manager-frontend`](https://github.com/GiulianoAparecido/portfolio-manager-frontend)
+Serves [`portfolio-manager-frontend`](https://github.com/giuliano-aparecido/portfolio-manager-frontend)
 (also documented, same conventions).
 
 Fleet-wide conventions shared with this repo's siblings live in
