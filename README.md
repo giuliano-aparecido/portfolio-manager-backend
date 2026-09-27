@@ -6,7 +6,7 @@ A Python/FastAPI backend for a multi-currency investment portfolio tracker
 (FIFO cost basis, live Yahoo Finance pricing, a manual-gain/loss
 passive-investment ledger with recurring deposits), built with SQLAlchemy,
 Alembic, and pytest. It serves
-[`portfolio-manager-frontend`](https://github.com/GiulianoAparecido/portfolio-manager-frontend).
+[`portfolio-manager-frontend`](https://github.com/giuliano-aparecido/portfolio-manager-frontend).
 
 ## Documentation
 

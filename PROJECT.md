@@ -4,7 +4,7 @@
 
 A REST API for tracking a multi-currency personal investment portfolio,
 with CHF as the base currency, serving
-[`portfolio-manager-frontend`](https://github.com/GiulianoAparecido/portfolio-manager-frontend).
+[`portfolio-manager-frontend`](https://github.com/giuliano-aparecido/portfolio-manager-frontend).
 
 Two portfolio types are tracked, with different data models because they
 behave differently:
