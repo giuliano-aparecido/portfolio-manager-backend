@@ -15,7 +15,7 @@ from app.services.fifo import TOLERANCE, process_ticker
 from app.services.mappers import portfolio_transaction_to_processed
 from app.services.price_service import fetch_current_price, fetch_fx_rate_to_chf
 from app.services.ticker_config import derive_yahoo_ticker
-from app.services.xirr import CashFlow, xirr_pct
+from app.services.xirr import CashFlow, span_days, xirr_pct
 
 
 def securities_cash_flows_chf(txns: list[PortfolioTransaction]) -> list[CashFlow]:
@@ -172,5 +172,6 @@ def compute_portfolio_rollup_with_flows(
         total_dividends_chf=total_dividends_chf,
         total_realized_gain_chf=total_realized_gain_chf,
         xirr_pct=xirr_pct(flows),
+        xirr_span_days=span_days(flows),
     )
     return rollup, flows

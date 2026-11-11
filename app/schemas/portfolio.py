@@ -165,6 +165,8 @@ class PortfolioRollup(CamelModel):
     # Annualized money-weighted return on all securities cash flows; None
     # when not meaningful (see services/xirr.py).
     xirr_pct: float | None = None
+    # Days of history the XIRR rests on, so the UI can caveat a short one.
+    xirr_span_days: int | None = None
 
 
 class CombinedReturn(CamelModel):
@@ -172,3 +174,4 @@ class CombinedReturn(CamelModel):
     investments; None when not meaningful (see services/xirr.py)."""
 
     xirr_pct: float | None
+    xirr_span_days: int | None

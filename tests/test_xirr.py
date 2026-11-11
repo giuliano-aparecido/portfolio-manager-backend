@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.services.xirr import xirr_pct
+from app.services.xirr import span_days, xirr_pct
 
 T0 = datetime(2024, 1, 1, tzinfo=timezone.utc)
 HALF_YEAR_PLUS = 200
@@ -37,8 +37,13 @@ def test_withdrawal_in_the_middle() -> None:
 
 
 def test_none_when_history_too_short() -> None:
-    assert xirr_pct([(T0, -1000), (T0 + timedelta(days=30), 1100)]) is None
-    assert xirr_pct([(T0, -1000), (T0 + timedelta(days=120), 1100)]) is None
+    assert xirr_pct([(T0, -1000), (T0 + timedelta(days=10), 1100)]) is None
+
+
+def test_short_but_over_minimum_history_is_shown() -> None:
+    # ~4 months: the rate is computed (annualized), not withheld.
+    result = xirr_pct([(T0, -1000), (T0 + timedelta(days=120), 1040)])
+    assert result is not None and 12 < result < 14
 
 
 def test_none_when_only_one_sign() -> None:
@@ -67,5 +72,17 @@ def test_naive_datetimes_treated_as_utc() -> None:
     assert xirr_pct(naive) == pytest.approx(xirr_pct(aware_mixed))
 
 
-def test_span_just_over_minimum_is_computed() -> None:
-    assert xirr_pct([(T0, -1000), (T0 + timedelta(days=HALF_YEAR_PLUS), 1050)]) is not None
+def test_span_days() -> None:
+    assert span_days([(T0, -1000), (T0 + timedelta(days=HALF_YEAR_PLUS), 1050)]) == HALF_YEAR_PLUS
+    assert span_days([(T0, -1000)]) is None
+    assert span_days([]) is None
+
+
+def test_minimum_history_boundary() -> None:
+    assert xirr_pct([(T0, -1000), (T0 + timedelta(days=29), 1010)]) is None
+    assert xirr_pct([(T0, -1000), (T0 + timedelta(days=30), 1010)]) is not None
+
+
+def test_span_days_ignores_zero_flows() -> None:
+    flows = [(T0, -1000), (T0 + timedelta(days=400), 0), (T0 + timedelta(days=100), 1050)]
+    assert span_days(flows) == 100

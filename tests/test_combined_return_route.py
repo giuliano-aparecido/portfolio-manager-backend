@@ -154,3 +154,16 @@ def test_closed_ticker_still_counts(
     body = authed_client.get("/portfolio-rollup").json()
     assert body["openTickers"] == []
     assert abs(body["xirrPct"] - 20.0) < 0.5
+
+
+def test_span_days_reported_so_ui_can_caveat_short_history(
+    authed_client: TestClient, db_session: Session, test_user: User, monkeypatch
+) -> None:
+    _buy(db_session, test_user)
+    db_session.query(PortfolioTransaction).update({"date": datetime.now(timezone.utc) - timedelta(days=120)})
+    db_session.flush()
+    _mock_prices(monkeypatch)
+    body = authed_client.get("/portfolio-rollup").json()
+    assert body["xirrPct"] is not None  # shown even under a year
+    assert body["xirrSpanDays"] == 120
+    assert authed_client.get("/combined-return").json()["xirrSpanDays"] == 120

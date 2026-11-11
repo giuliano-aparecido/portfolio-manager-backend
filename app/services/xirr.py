@@ -12,9 +12,11 @@ what matters for regular monthly investing.
 
 from datetime import datetime, timezone
 
-# Annualizing a short window produces meaningless numbers (+4% over three
-# months is ~+17% a year), so below this span the result is withheld.
-MIN_SPAN_DAYS = 180
+# Below this span the rate is pure noise (a few days of movement compounded
+# to a year), so it is withheld. Between this and a year it IS shown, but
+# callers should say how much history it rests on (see span_days): +4% over
+# three months annualizes to ~+17%, which is correct but a projection.
+MIN_SPAN_DAYS = 30
 
 _LOWER_RATE = -0.99  # -99% / year
 _UPPER_RATE = 1000.0  # +100000% / year
@@ -37,6 +39,13 @@ def _npv(rate: float, flows: list[CashFlow], t0: datetime) -> float:
         except OverflowError:
             total += float("inf") if amount > 0 else float("-inf")
     return total
+
+
+def span_days(flows: list[CashFlow]) -> int | None:
+    """Days between the first and last non-zero flow, i.e. how much history
+    an XIRR over these flows rests on; None with fewer than two flows."""
+    dates = sorted(_aware(when) for when, amount in flows if amount != 0)
+    return (dates[-1] - dates[0]).days if len(dates) >= 2 else None
 
 
 def xirr_pct(flows: list[CashFlow], *, min_span_days: int = MIN_SPAN_DAYS) -> float | None:

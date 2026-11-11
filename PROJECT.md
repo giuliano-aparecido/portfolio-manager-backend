@@ -100,7 +100,7 @@ money-weighted annualized rate over dated CHF cash flows - BUY/DRIP as
 outflows at their own captured FX rate, SELL/DIVIDEND as inflows, plus
 today's market value as the terminal inflow. Exposed as `xirrPct` on
 `/portfolio-rollup` (securities) and via `GET /combined-return`
-(securities + passive pooled). It is `null` below 180 days of history or
+(securities + passive pooled). It is `null` below 30 days of history or
 when no meaningful rate exists. Tickers with a failed price/FX fetch are
 excluded from the flows, as from every other total. Passive flows are
 converted at today's FX rate (the ledger stores no historical rate), and

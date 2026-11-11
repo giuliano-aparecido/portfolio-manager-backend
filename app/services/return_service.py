@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from app.schemas.portfolio import CombinedReturn
 from app.services.passive_rollup_service import compute_passive_rollup_with_flows
 from app.services.portfolio_rollup_service import compute_portfolio_rollup_with_flows
-from app.services.xirr import xirr_pct
+from app.services.xirr import span_days, xirr_pct
 
 
 def compute_combined_return(db: Session, user_id: str | None = None, *, force_refresh: bool = False) -> CombinedReturn:
@@ -13,4 +13,5 @@ def compute_combined_return(db: Session, user_id: str | None = None, *, force_re
     """
     _, securities_flows = compute_portfolio_rollup_with_flows(db, user_id, force_refresh=force_refresh)
     _, passive_flows = compute_passive_rollup_with_flows(db, user_id, force_refresh=force_refresh)
-    return CombinedReturn(xirr_pct=xirr_pct(securities_flows + passive_flows))
+    flows = securities_flows + passive_flows
+    return CombinedReturn(xirr_pct=xirr_pct(flows), xirr_span_days=span_days(flows))
