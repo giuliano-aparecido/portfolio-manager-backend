@@ -162,3 +162,13 @@ class PortfolioRollup(CamelModel):
     total_unrealized_gain_chf: float
     total_dividends_chf: float
     total_realized_gain_chf: float
+    # Annualized money-weighted return on all securities cash flows; None
+    # when not meaningful (see services/xirr.py).
+    xirr_pct: float | None = None
+
+
+class CombinedReturn(CamelModel):
+    """Annualized money-weighted return across securities + passive
+    investments; None when not meaningful (see services/xirr.py)."""
+
+    xirr_pct: float | None

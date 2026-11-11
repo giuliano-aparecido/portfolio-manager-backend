@@ -14,6 +14,7 @@ from app.rate_limiter import McpRateLimitMiddleware, limiter
 from app.routers import (
     agent,
     auth,
+    combined_return,
     passive_investments,
     passive_recurring_deposit,
     passive_rollup,
@@ -66,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(portfolio_tickers.router)
     app.include_router(portfolio_transactions.router)
     app.include_router(portfolio_rollup.router)
+    app.include_router(combined_return.router)
     app.include_router(passive_investments.router)
     app.include_router(passive_transactions.router)
     app.include_router(passive_recurring_deposit.router)

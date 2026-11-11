@@ -1,5 +1,6 @@
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -9,9 +10,23 @@ from app.services.concurrency import MAX_FETCH_WORKERS
 from app.services.ledger import PassiveLedgerTxn, compute_net_balance
 from app.services.price_service import fetch_fx_rate_to_chf
 from app.services.recurring import materialize_due_recurring_deposits
+from app.services.xirr import CashFlow
 
 
 def compute_passive_rollup(db: Session, user_id: str | None = None, *, force_refresh: bool = False) -> PassiveRollup:
+    return compute_passive_rollup_with_flows(db, user_id, force_refresh=force_refresh)[0]
+
+
+def compute_passive_rollup_with_flows(
+    db: Session, user_id: str | None = None, *, force_refresh: bool = False
+) -> tuple[PassiveRollup, list[CashFlow]]:
+    """The rollup plus dated CHF cash flows for the combined XIRR: deposits
+    negative, withdrawals positive, and each investment's current market
+    value as a terminal inflow. The passive ledger stores no historical FX
+    rate, so every flow is converted at today's rate - an approximation
+    that only matters for non-CHF passive investments. Investments dropped
+    for a missing FX rate, or with no gain/loss entered, are excluded.
+    """
     if user_id:
         materialize_due_recurring_deposits(db, user_id=user_id)
 
@@ -58,6 +73,8 @@ def compute_passive_rollup(db: Session, user_id: str | None = None, *, force_ref
     affected_investments_by_currency: dict[str, list[str]] = defaultdict(list)
 
     rows: list[PassiveInvestmentRollupRow] = []
+    flows: list[CashFlow] = []
+    now = datetime.now(timezone.utc)
     for inv in investments:
         fx_rate = fx_rate_by_currency.get(inv.currency)
         if fx_rate is None:
@@ -75,6 +92,15 @@ def compute_passive_rollup(db: Session, user_id: str | None = None, *, force_ref
         )
         cost_basis_chf = cost_basis_native * fx_rate
         market_value_chf = market_value_native * fx_rate
+        # Without an entered gain/loss, market value above is just cost
+        # basis (a flat 0%) - feeding that into XIRR would pass an unknown
+        # off as a measured return, so such investments stay out of it.
+        if inv.gain_loss_pct is not None:
+            for t in transactions_by_investment[inv.id]:
+                sign = -1 if t.type == "DEPOSIT" else 1
+                flows.append((t.date, sign * t.amount_native * fx_rate))
+            if market_value_chf > 0:
+                flows.append((now, market_value_chf))
 
         rows.append(
             PassiveInvestmentRollupRow(
@@ -99,10 +125,11 @@ def compute_passive_rollup(db: Session, user_id: str | None = None, *, force_ref
         for ccy, error in fx_error_by_currency.items()
     ]
 
-    return PassiveRollup(
+    rollup = PassiveRollup(
         rows=rows,
         fx_errors=fx_errors,
         total_cost_basis_chf=sum(r.cost_basis_chf for r in rows),
         total_market_value_chf=sum(r.market_value_chf for r in rows),
         total_unrealized_gain_chf=sum(r.unrealized_gain_chf for r in rows),
     )
+    return rollup, flows

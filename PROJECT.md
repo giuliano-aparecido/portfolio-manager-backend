@@ -95,6 +95,19 @@ current/unrealized cost basis (while it's still held) — the same
 treatment as any other BUY lot, deliberately, so `average_cost_per_share`
 reflects the true cost of every share actually held.
 
+**Annual return (XIRR)** (`services/xirr.py`): the headline return is a
+money-weighted annualized rate over dated CHF cash flows - BUY/DRIP as
+outflows at their own captured FX rate, SELL/DIVIDEND as inflows, plus
+today's market value as the terminal inflow. Exposed as `xirrPct` on
+`/portfolio-rollup` (securities) and via `GET /combined-return`
+(securities + passive pooled). It is `null` below 180 days of history or
+when no meaningful rate exists. Tickers with a failed price/FX fetch are
+excluded from the flows, as from every other total. Passive flows are
+converted at today's FX rate (the ledger stores no historical rate), and
+passive market value is derived from the user-entered `gain_loss_pct`, so
+its contribution is only as accurate as that input. The plain
+`(value - cost) / cost` figure remains, labelled "Unrealized G/L %".
+
 **Passive ledger** (`services/ledger.py`): cost basis is simply the net of
 all deposits minus withdrawals. A separate integrity check rejects any
 transaction ordering where the running balance would go negative — this
