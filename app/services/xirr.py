@@ -41,11 +41,55 @@ def _npv(rate: float, flows: list[CashFlow], t0: datetime) -> float:
     return total
 
 
+def _normalized(flows: list[CashFlow]) -> list[CashFlow]:
+    """Non-zero flows, timezone-aware (naive = UTC), oldest first."""
+    return sorted(
+        ((_aware(when), amount) for when, amount in flows if amount != 0),
+        key=lambda f: f[0],
+    )
+
+
+def _span_days(flows: list[CashFlow]) -> int | None:
+    return (flows[-1][0] - flows[0][0]).days if len(flows) >= 2 else None
+
+
 def span_days(flows: list[CashFlow]) -> int | None:
     """Days between the first and last non-zero flow, i.e. how much history
     an XIRR over these flows rests on; None with fewer than two flows."""
-    dates = sorted(_aware(when) for when, amount in flows if amount != 0)
-    return (dates[-1] - dates[0]).days if len(dates) >= 2 else None
+    return _span_days(_normalized(flows))
+
+
+def _is_meaningful(flows: list[CashFlow], min_span_days: int) -> bool:
+    """Needs money both in and out, over at least `min_span_days`."""
+    has_outflow = any(a < 0 for _, a in flows)
+    has_inflow = any(a > 0 for _, a in flows)
+    span = _span_days(flows)
+    return has_outflow and has_inflow and span is not None and span >= min_span_days
+
+
+def _solve_rate(flows: list[CashFlow]) -> float | None:
+    """Bisection for the rate where NPV is zero, as a fraction; None when
+    NPV doesn't change sign within the searched range."""
+    t0 = flows[0][0]
+    low, high = _LOWER_RATE, _UPPER_RATE
+    f_low, f_high = _npv(low, flows, t0), _npv(high, flows, t0)
+    if f_low == 0:
+        return low
+    if f_high == 0:
+        return high
+    if (f_low > 0) == (f_high > 0):
+        return None
+
+    for _ in range(_ITERATIONS):
+        mid = (low + high) / 2
+        f_mid = _npv(mid, flows, t0)
+        if abs(f_mid) < _TOLERANCE or (high - low) < _TOLERANCE:
+            return mid
+        if (f_mid > 0) == (f_low > 0):
+            low, f_low = mid, f_mid
+        else:
+            high = mid
+    return (low + high) / 2
 
 
 def xirr_pct(flows: list[CashFlow], *, min_span_days: int = MIN_SPAN_DAYS) -> float | None:
@@ -55,35 +99,8 @@ def xirr_pct(flows: list[CashFlow], *, min_span_days: int = MIN_SPAN_DAYS) -> fl
 
     Naive datetimes are treated as UTC.
     """
-    flows = sorted(
-        ((_aware(when), amount) for when, amount in flows if amount != 0),
-        key=lambda f: f[0],
-    )
-    if len(flows) < 2:
+    flows = _normalized(flows)
+    if not _is_meaningful(flows, min_span_days):
         return None
-    if not (any(a < 0 for _, a in flows) and any(a > 0 for _, a in flows)):
-        return None
-
-    t0 = flows[0][0]
-    if (flows[-1][0] - t0).days < min_span_days:
-        return None
-
-    low, high = _LOWER_RATE, _UPPER_RATE
-    f_low, f_high = _npv(low, flows, t0), _npv(high, flows, t0)
-    if f_low == 0:
-        return low * 100
-    if f_high == 0:
-        return high * 100
-    if (f_low > 0) == (f_high > 0):
-        return None  # no sign change: no root in range
-
-    for _ in range(_ITERATIONS):
-        mid = (low + high) / 2
-        f_mid = _npv(mid, flows, t0)
-        if abs(f_mid) < _TOLERANCE or (high - low) < _TOLERANCE:
-            return mid * 100
-        if (f_mid > 0) == (f_low > 0):
-            low, f_low = mid, f_mid
-        else:
-            high = mid
-    return ((low + high) / 2) * 100
+    rate = _solve_rate(flows)
+    return None if rate is None else rate * 100
