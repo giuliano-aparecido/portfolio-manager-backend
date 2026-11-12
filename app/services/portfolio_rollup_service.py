@@ -4,6 +4,7 @@ yfinance calls are blocking I/O.
 
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -14,9 +15,38 @@ from app.services.fifo import TOLERANCE, process_ticker
 from app.services.mappers import portfolio_transaction_to_processed
 from app.services.price_service import fetch_current_price, fetch_fx_rate_to_chf
 from app.services.ticker_config import derive_yahoo_ticker
+from app.services.xirr import CashFlow, span_days, xirr_pct
+
+
+def securities_cash_flows_chf(txns: list[PortfolioTransaction]) -> list[CashFlow]:
+    """Investor-perspective CHF cash flows at each transaction's own
+    captured FX rate: money put in is negative, money taken out positive.
+    A DRIP is its own BUY (see PROJECT.md), so it is an outflow here and
+    nets against the DIVIDEND that funded it.
+    """
+    flows: list[CashFlow] = []
+    for t in txns:
+        if t.type in ("BUY", "DRIP"):
+            flows.append((t.date, -(t.quantity * t.price_per_share) * t.fx_rate_to_chf))
+        elif t.type == "SELL":
+            flows.append((t.date, t.quantity * t.price_per_share * t.fx_rate_to_chf))
+        elif t.type == "DIVIDEND":
+            flows.append((t.date, (t.cash_amount or 0) * t.fx_rate_to_chf))
+    return flows
 
 
 def compute_portfolio_rollup(db: Session, user_id: str | None = None, *, force_refresh: bool = False) -> PortfolioRollup:
+    return compute_portfolio_rollup_with_flows(db, user_id, force_refresh=force_refresh)[0]
+
+
+def compute_portfolio_rollup_with_flows(
+    db: Session, user_id: str | None = None, *, force_refresh: bool = False
+) -> tuple[PortfolioRollup, list[CashFlow]]:
+    """The rollup plus the dated CHF cash flows behind its XIRR, with today's
+    market value appended as the terminal inflow. Tickers whose price/FX
+    fetch failed are left out of the flows (as they are from every other
+    total), so a missing quote can't masquerade as a total loss.
+    """
     txn_query = db.query(PortfolioTransaction).order_by(PortfolioTransaction.date.asc(), PortfolioTransaction.id.asc())
     metadata_query = db.query(TickerMetadata)
     if user_id:
@@ -123,13 +153,25 @@ def compute_portfolio_rollup(db: Session, user_id: str | None = None, *, force_r
     open_tickers.sort(key=lambda r: r.ticker)
     closed_tickers.sort(key=lambda r: r.ticker)
 
-    return PortfolioRollup(
+    failed = {e.ticker for e in price_errors}
+    flows: list[CashFlow] = []
+    for ticker, txns in by_ticker.items():
+        if ticker not in failed:
+            flows.extend(securities_cash_flows_chf(txns))
+    total_market_value_chf = sum(r.market_value_chf for r in open_tickers)
+    if total_market_value_chf > 0:
+        flows.append((datetime.now(timezone.utc), total_market_value_chf))
+
+    rollup = PortfolioRollup(
         open_tickers=open_tickers,
         closed_tickers=closed_tickers,
         price_errors=price_errors,
         total_cost_basis_chf=sum(r.cost_basis_chf for r in open_tickers),
-        total_market_value_chf=sum(r.market_value_chf for r in open_tickers),
+        total_market_value_chf=total_market_value_chf,
         total_unrealized_gain_chf=sum(r.unrealized_gain_chf for r in open_tickers),
         total_dividends_chf=total_dividends_chf,
         total_realized_gain_chf=total_realized_gain_chf,
+        xirr_pct=xirr_pct(flows),
+        xirr_span_days=span_days(flows),
     )
+    return rollup, flows
