@@ -86,3 +86,34 @@ def test_minimum_history_boundary() -> None:
 def test_span_days_ignores_zero_flows() -> None:
     flows = [(T0, -1000), (T0 + timedelta(days=400), 0), (T0 + timedelta(days=100), 1050)]
     assert span_days(flows) == 100
+
+
+def test_four_percent_over_three_months_annualizes_to_about_seventeen_percent() -> None:
+    result = xirr_pct([(T0, -1000), (T0 + timedelta(days=91), 1040)])
+    assert result == pytest.approx(17.0, abs=0.5)
+
+
+def test_very_long_history_still_returns_its_rate() -> None:
+    # ln(1.1) / (100_000 / 365) = 0.0348 % a year
+    result = xirr_pct([(T0, -1000), (T0 + timedelta(days=100_000), 1100)])
+    assert result == pytest.approx(0.0348, abs=0.01)
+
+
+def test_mixed_sign_flows_over_a_century_return_their_rate() -> None:
+    # Root verified by a high-precision sign scan of NPV over the whole search range.
+    flows = [
+        (T0, -1000),
+        (T0 + timedelta(days=40_000), 1500),
+        (T0 + timedelta(days=40_001), -1500),
+        (T0 + timedelta(days=40_002), 1500),
+    ]
+    assert xirr_pct(flows) == pytest.approx(0.3707, abs=0.001)
+
+
+def test_none_when_opposite_sign_flows_both_blow_up_at_the_lower_bound() -> None:
+    flows = [
+        (T0, -1000),
+        (T0 + timedelta(days=60_000), 1500),
+        (T0 + timedelta(days=60_001), -1500),
+    ]
+    assert xirr_pct(flows) is None
