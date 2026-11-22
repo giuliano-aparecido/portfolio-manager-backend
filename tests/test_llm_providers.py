@@ -6,6 +6,7 @@ from google.genai import types as genai_types
 from app.config import Settings
 from app.routers.agent import get_llm_provider
 from app.services.llm.base import AssistantTurn, ToolCallRequest, ToolResult, ToolResultsTurn, UserTurn
+from app.services.llm import gemini_provider
 from app.services.llm.claude_provider import ClaudeProvider, _to_claude_messages
 from app.services.llm.gemini_provider import GeminiProvider, _events_from_chunk, _to_gemini_contents
 
@@ -222,3 +223,18 @@ class TestGetLlmProvider:
     def test_selects_claude_when_configured(self, monkeypatch) -> None:
         monkeypatch.setattr("app.routers.agent.get_settings", lambda: Settings(agent_provider="claude"))
         assert isinstance(get_llm_provider(), ClaudeProvider)
+
+
+class TestGeminiProviderClientConstruction:
+    def test_client_is_built_for_the_v1beta_api_because_function_calling_needs_it(self, monkeypatch) -> None:
+        captured: dict = {}
+
+        class _RecordingClient:
+            def __init__(self, api_key, http_options) -> None:
+                captured["http_options"] = http_options
+
+        monkeypatch.setattr(gemini_provider.genai, "Client", _RecordingClient)
+
+        GeminiProvider()
+
+        assert captured["http_options"].api_version == "v1beta"

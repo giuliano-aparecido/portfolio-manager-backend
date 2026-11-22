@@ -9,6 +9,7 @@ from google.genai import types
 from pydantic import BaseModel
 
 from app.config import get_settings
+from app.services.llm.gemini_provider import GEMINI_API_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,8 @@ def classify_headlines(
     )
     try:
         with genai.Client(
-            api_key=settings.gemini_api_key, http_options=types.HttpOptions(timeout=_TIMEOUT_MS)
+            api_key=settings.gemini_api_key,
+            http_options=types.HttpOptions(api_version=GEMINI_API_VERSION, timeout=_TIMEOUT_MS),
         ) as client:
             parsed = client.models.generate_content(model=settings.gemini_model, contents=prompt, config=config).parsed
     except Exception as exc:  # noqa: BLE001

@@ -14,7 +14,9 @@ def _settings(api_key: str = "test-key"):
     return SimpleNamespace(gemini_api_key=api_key, gemini_model="gemini-test")
 
 
-def _fake_client(parsed=None, error: Exception | None = None, calls: list | None = None):
+def _fake_client(
+    parsed=None, error: Exception | None = None, calls: list | None = None, client_options: list | None = None
+):
     class _Models:
         def generate_content(self, model, contents, config):
             if calls is not None:
@@ -25,6 +27,8 @@ def _fake_client(parsed=None, error: Exception | None = None, calls: list | None
 
     class _Client:
         def __init__(self, api_key, http_options):
+            if client_options is not None:
+                client_options.append(http_options)
             self.models = _Models()
 
         def __enter__(self):
@@ -61,6 +65,16 @@ def test_prompt_names_the_company_and_numbers_each_headline(configured, monkeypa
     assert "Novo Nordisk A/S (ticker NVO)" in calls[0]
     assert "0. Novo Sets Long-Term Targets - Reuters" in calls[0]
     assert "1. Novo Banco reports profit surge - Reuters" in calls[0]
+
+
+def test_the_client_is_built_for_the_v1beta_api(configured, monkeypatch):
+    client_options: list = []
+    parsed = [_Assessment(index=0, relevant=True, importance=3), _Assessment(index=1, relevant=True, importance=3)]
+    monkeypatch.setattr(news_classifier.genai, "Client", _fake_client(parsed, client_options=client_options))
+
+    classify_headlines("Novo Nordisk A/S", "NVO", "Healthcare", HEADLINES)
+
+    assert [options.api_version for options in client_options] == ["v1beta"]
 
 
 def test_relevant_but_unimportant_is_not_kept():
