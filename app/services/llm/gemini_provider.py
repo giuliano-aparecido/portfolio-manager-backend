@@ -28,6 +28,8 @@ from app.services.llm.base import AgentEvent, AssistantTurn, LLMProvider, ToolCa
 # truncation thresholds don't drift apart from each other unnoticed.
 MAX_OUTPUT_TOKENS = 8192
 
+GEMINI_API_VERSION = "v1beta"
+
 
 def _tool_result_response(content: str, *, is_error: bool) -> dict[str, Any]:
     # FunctionResponse.response is a dict, not a string — our tool results
@@ -121,7 +123,9 @@ def _events_from_chunk(chunk: types.GenerateContentResponse, call_ids: Iterator[
 class GeminiProvider(LLMProvider):
     def __init__(self, client: genai.Client | None = None, model: str | None = None) -> None:
         settings = get_settings()
-        self._client = client or genai.Client(api_key=settings.gemini_api_key)
+        self._client = client or genai.Client(
+            api_key=settings.gemini_api_key, http_options=types.HttpOptions(api_version=GEMINI_API_VERSION)
+        )
         self._model = model or settings.gemini_model
 
     async def stream_turn(
